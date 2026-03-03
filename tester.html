@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dan's TTS Tester</title>
+  <style>
+    :root {
+      --bg: #ffffff; --bg2: #f7f7f8; --fg: #111; --fg2: #555; --border: #e2e2e2;
+      --primary: #4f46e5; --primary-hover: #4338ca; --primary-fg: #fff;
+      --card-bg: #fff; --card-shadow: rgba(0,0,0,0.06);
+      --avatar-f: linear-gradient(135deg, #a855f7, #ec4899);
+      --avatar-m: linear-gradient(135deg, #3b82f6, #14b8a6);
+      --input-bg: #fff; --highlight: #fef08a;
+    }
+    html.dark {
+      --bg: #0f0f0f; --bg2: #1a1a1a; --fg: #e8e8e8; --fg2: #999; --border: #333;
+      --primary: #6366f1; --primary-hover: #818cf8; --primary-fg: #fff;
+      --card-bg: #1e1e1e; --card-shadow: rgba(0,0,0,0.3);
+      --input-bg: #1e1e1e; --highlight: #854d0e;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); transition: background .2s, color .2s; }
+
+    /* Top bar */
+    .topbar { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 12px 16px 8px; position: sticky; top: 0; background: var(--bg); z-index: 10; }
+    .topbar h1 { font-size: 1.3rem; }
+    .topbar-actions { display: flex; gap: 8px; align-items: center; }
+    .icon-btn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 13px; cursor: pointer; color: var(--fg); }
+    .icon-btn:hover { background: var(--bg2); }
+
+    /* Main two-column layout */
+    .main-layout { max-width: 1200px; margin: 0 auto; display: flex; gap: 20px; padding: 0 16px 96px; }
+    .left-col { flex: 1 1 0; min-width: 0; }
+    .right-col { width: 280px; flex-shrink: 0; position: sticky; top: 52px; align-self: flex-start; max-height: calc(100vh - 60px); overflow-y: auto; }
+    @media (max-width: 800px) {
+      .main-layout { flex-direction: column; }
+      .right-col { width: 100%; position: static; max-height: none; }
+    }
+
+    /* Controls */
+    label { display: block; margin-top: 10px; font-weight: 600; font-size: 13px; color: var(--fg); }
+    select, input[type="text"], textarea { font-size: 14px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--fg); width: 100%; }
+    textarea { min-height: 100px; max-height: 600px; resize: none; overflow-y: auto; }
+    .text-wrap { position: relative; }
+    .text-meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg2); margin-top: 2px; }
+    .clear-btn { position: absolute; top: 6px; right: 8px; background: none; border: none; font-size: 16px; color: var(--fg2); cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+    .clear-btn:hover { background: var(--bg2); color: var(--fg); }
+    .url-row { display: flex; gap: 6px; align-items: flex-end; }
+    .url-row input { flex: 1; }
+    .url-row .btn { flex-shrink: 0; margin-top: 0; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row > div { flex: 1 1 140px; }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .btn { padding: 7px 14px; font-size: 13px; border-radius: 6px; cursor: pointer; border: none; transition: background .15s; }
+    .btn-primary { background: var(--primary); color: var(--primary-fg); }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--fg); }
+    .btn-secondary:hover:not(:disabled) { background: var(--bg2); }
+    .btn-secondary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* Player & log */
+    audio { width: 100%; margin-top: 10px; }
+    .log { margin-top: 6px; color: var(--fg2); font-size: 12px; min-height: 18px; }
+
+    /* Loading animation */
+    .loading-bar { height: 3px; background: var(--bg2); border-radius: 2px; margin-top: 6px; overflow: hidden; display: none; }
+    .loading-bar.active { display: block; }
+    .loading-bar .bar { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; animation: slide 1.2s ease-in-out infinite; }
+    @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
+
+    /* Advanced toggle */
+    .advanced-toggle { font-size: 12px; color: var(--fg2); cursor: pointer; margin-top: 6px; display: inline-block; }
+    .advanced-toggle:hover { color: var(--fg); }
+    .advanced-content { display: none; margin-top: 4px; }
+    .advanced-content.open { display: block; }
+
+    /* Word highlight display */
+    .highlight-box { margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); line-height: 1.8; font-size: 16px; min-height: 60px; display: none; }
+    .highlight-box .word { display: inline; padding: 1px 2px; border-radius: 3px; transition: background .08s; }
+    .highlight-box .word.active { background: var(--highlight); font-weight: 600; }
+
+    /* Filter tabs */
+    .filter-tabs { display: flex; gap: 4px; margin: 8px 0 6px; }
+    .filter-tab { padding: 4px 12px; border-radius: 16px; font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--fg); }
+    .filter-tab.active { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+
+    /* Voice grid (right column) */
+    .voice-list { display: flex; flex-direction: column; gap: 6px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; box-shadow: 0 1px 2px var(--card-shadow); background: var(--card-bg); display: flex; align-items: center; gap: 8px; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+    .card:hover { border-color: var(--primary); }
+    .card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
+    .avatar { width: 32px; height: 32px; border-radius: 50%; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; flex-shrink: 0; }
+    .avatar.female { background: var(--avatar-f); }
+    .avatar.male { background: var(--avatar-m); }
+    .card-info { flex: 1; min-width: 0; }
+    .card-name { font-weight: 700; font-size: 13px; }
+    .card-full { font-size: 10px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card .play-sample { background: none; border: none; font-size: 14px; cursor: pointer; color: var(--fg2); padding: 4px; border-radius: 4px; flex-shrink: 0; }
+    .card .play-sample:hover { background: var(--bg2); color: var(--fg); }
+    .card .fav-btn { background: none; border: none; font-size: 16px; cursor: pointer; color: var(--fg2); padding: 2px 4px; border-radius: 4px; flex-shrink: 0; opacity: .4; transition: opacity .15s, color .15s; }
+    .card .fav-btn:hover { opacity: 1; }
+    .card .fav-btn.is-fav { opacity: 1; color: #f59e0b; }
+    .fav-badge { display: inline-block; background: #f59e0b; color: #000; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; }
+
+    /* History */
+    .history { margin-top: 16px; }
+    .history h3 { font-size: .95rem; margin-bottom: 6px; }
+    .history-item { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+    .history-item .hi-text { flex: 1; color: var(--fg2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .history-item .hi-voice { font-weight: 600; min-width: 60px; font-size: 11px; }
+    .history-item .btn { font-size: 10px; padding: 2px 6px; margin-top: 0; }
+  </style>
+</head>
+<body>
+
+  <div class="topbar">
+    <h1>Dan's TTS</h1>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode">Dark</button>
+    </div>
+  </div>
+
+  <div class="main-layout">
+    <!-- LEFT: Controls + highlight -->
+    <div class="left-col">
+      <label>Load from URL</label>
+      <div class="url-row">
+        <input id="url-input" type="text" placeholder="https://crucial-conversations.netlify.app/resources/ebook/chapter_12" />
+        <button class="btn btn-secondary" id="load-url">Load</button>
+      </div>
+
+      <label>Text</label>
+      <div class="text-wrap">
+        <textarea id="text">Hello world from Dan's TTS Project.</textarea>
+        <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
+      </div>
+      <div class="text-meta">
+        <span id="text-count">6 words &middot; 35 chars</span>
+        <span>Ctrl+Enter to synthesize</span>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Voice <span id="voice-count" style="font-weight:400;font-size:11px;color:var(--fg2);"></span></label>
+          <select id="voice"></select>
+        </div>
+        <div>
+          <label>Format</label>
+          <select id="format">
+            <option value="mp3">mp3</option>
+            <option value="m4a">m4a</option>
+            <option value="ogg">ogg</option>
+            <option value="flac">flac</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="go">Synthesize</button>
+        <button class="btn btn-primary" id="download" disabled>Download</button>
+        <button class="btn btn-secondary" id="preview">Preview voice</button>
+        <button class="btn btn-secondary" id="refresh">Refresh voices</button>
+      </div>
+
+      <div class="loading-bar" id="loading"><div class="bar"></div></div>
+      <audio id="player" controls style="display:none;"></audio>
+      <div class="log" id="log"></div>
+
+      <span class="advanced-toggle" id="adv-toggle">Advanced &darr;</span>
+      <div class="advanced-content" id="adv-content">
+        <label>API Base URL</label>
+        <input id="api" type="text" value="http://localhost:8000" />
+      </div>
+
+      <!-- Word highlight display -->
+      <div class="highlight-box" id="highlight-box"></div>
+
+      <!-- History -->
+      <div class="history" id="history-section" style="display:none;">
+        <h3>History</h3>
+        <div id="history-list"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Voice cards -->
+    <div class="right-col">
+      <h3 style="font-size:.95rem;margin-bottom:4px;">Voices</h3>
+      <div class="filter-tabs" id="filter-tabs">
+        <button class="filter-tab active" data-filter="all">All</button>
+        <button class="filter-tab" data-filter="Female">Female</button>
+        <button class="filter-tab" data-filter="Male">Male</button>
+        <button class="filter-tab" data-filter="fav">&#x2B50; Favorite</button>
+      </div>
+      <div id="voices-grid" class="voice-list"></div>
+    </div>
+  </div>
+
+  <script>
+    /* ---- Elements ---- */
+    const btn = document.getElementById('go');
+    const downloadBtn = document.getElementById('download');
+    const logEl = document.getElementById('log');
+    const voiceSelect = document.getElementById('voice');
+    const voiceCountEl = document.getElementById('voice-count');
+    const refreshBtn = document.getElementById('refresh');
+    const previewBtn = document.getElementById('preview');
+    const grid = document.getElementById('voices-grid');
+    const textArea = document.getElementById('text');
+    const urlInput = document.getElementById('url-input');
+    const loadUrlBtn = document.getElementById('load-url');
+    const textCount = document.getElementById('text-count');
+    const clearBtn = document.getElementById('clear-text');
+    const loadingBar = document.getElementById('loading');
+    const playerEl = document.getElementById('player');
+    const themeBtn = document.getElementById('theme-toggle');
+    const advToggle = document.getElementById('adv-toggle');
+    const advContent = document.getElementById('adv-content');
+    const historySection = document.getElementById('history-section');
+    const historyList = document.getElementById('history-list');
+    const filterTabs = document.getElementById('filter-tabs');
+    const highlightBox = document.getElementById('highlight-box');
+
+    let allVoices = [];
+    let lastBlob = null;
+    let lastExt = 'mp3';
+    let lastText = '';
+    let lastVoice = '';
+    let isSynthesizing = false;
+    let selectedVoiceName = '';
+    let currentFilter = 'all';
+    let favoriteVoice = localStorage.getItem('tts-fav-voice') || '';
+    const historyArr = [];
+    let wordBoundaries = [];
+    let wordSpans = [];
+
+    /* ---- Dark mode ---- */
+    function setTheme(dark) {
+      document.documentElement.classList.toggle('dark', dark);
+      themeBtn.textContent = dark ? 'Light' : 'Dark';
+      localStorage.setItem('tts-theme', dark ? 'dark' : 'light');
+    }
+    themeBtn.onclick = () => setTheme(!document.documentElement.classList.contains('dark'));
+    if (localStorage.getItem('tts-theme') === 'dark' || (!localStorage.getItem('tts-theme') && matchMedia('(prefers-color-scheme:dark)').matches)) setTheme(true);
+
+    /* ---- Advanced toggle ---- */
+    advToggle.onclick = () => {
+      advContent.classList.toggle('open');
+      advToggle.innerHTML = advContent.classList.contains('open') ? 'Advanced &uarr;' : 'Advanced &darr;';
+    };
+
+    /* ---- Text count + auto-resize ---- */
+    function updateCount() {
+      const t = textArea.value;
+      const words = t.trim() ? t.trim().split(/\s+/).length : 0;
+      textCount.textContent = `${words} word${words !== 1 ? 's' : ''} \u00b7 ${t.length} chars`;
+      textArea.style.height = 'auto';
+      textArea.style.height = Math.min(textArea.scrollHeight, 600) + 'px';
+    }
+    textArea.addEventListener('input', updateCount);
+    updateCount();
+
+    /* ---- Clear text ---- */
+    clearBtn.onclick = () => { textArea.value = ''; updateCount(); textArea.focus(); };
+
+    /* ---- Keyboard shortcut ---- */
+    textArea.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); btn.click(); }
+    });
+
+    /* ---- Friendly name ---- */
+    function friendlyName(shortName) {
+      return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
+    }
+
+    /* ---- Load voices ---- */
+    async function loadVoices(refresh = false) {
+      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      logEl.textContent = refresh ? 'Refreshing voices...' : 'Loading voices...';
+      try {
+        const res = await fetch(`${api}/voices${refresh ? '?refresh=1' : ''}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        allVoices = await res.json();
+        voiceSelect.innerHTML = '';
+        allVoices.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.shortName || v.name;
+          opt.textContent = `${friendlyName(v.shortName)} (${v.gender || ''})`;
+          voiceSelect.appendChild(opt);
+        });
+        if (favoriteVoice && allVoices.some(v => (v.shortName || v.name) === favoriteVoice)) {
+          selectedVoiceName = favoriteVoice;
+        } else if (!selectedVoiceName && allVoices.length) {
+          selectedVoiceName = allVoices[0].shortName || allVoices[0].name;
+        }
+        voiceSelect.value = selectedVoiceName;
+        voiceCountEl.textContent = allVoices.length ? `(${allVoices.length})` : '';
+        renderGrid();
+        logEl.textContent = allVoices.length ? 'Voices loaded.' : 'No voices returned.';
+      } catch (err) {
+        console.error(err);
+        logEl.textContent = 'Error loading voices: ' + err.message;
+      }
+    }
+
+    /* ---- Render voice list (right column) ---- */
+    function renderGrid() {
+      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      grid.innerHTML = '';
+      const filtered = currentFilter === 'fav'
+        ? allVoices.filter(v => (v.shortName || v.name) === favoriteVoice)
+        : currentFilter === 'all' ? allVoices : allVoices.filter(v => v.gender === currentFilter);
+      filtered.forEach(v => {
+        const sn = v.shortName || v.name;
+        const card = document.createElement('div');
+        card.className = 'card' + (sn === selectedVoiceName ? ' selected' : '');
+        card.onclick = (e) => {
+          if (e.target.closest('.play-sample')) return;
+          selectedVoiceName = sn;
+          voiceSelect.value = sn;
+          document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+          card.classList.add('selected');
+        };
+
+        const avatar = document.createElement('div');
+        avatar.className = 'avatar ' + (v.gender === 'Female' ? 'female' : 'male');
+        avatar.textContent = friendlyName(sn).slice(0, 2).toUpperCase();
+
+        const info = document.createElement('div');
+        info.className = 'card-info';
+        info.innerHTML = `<div class="card-name">${friendlyName(sn)}${sn === favoriteVoice ? '<span class="fav-badge">FAV</span>' : ''}</div><div class="card-full">${sn}</div>`;
+
+        const play = document.createElement('button');
+        play.className = 'play-sample';
+        play.textContent = '\u25b6';
+        play.title = 'Play sample';
+        play.onclick = async (e) => {
+          e.stopPropagation();
+          if (!v.sampleUrl) return;
+          try {
+            logEl.textContent = `Loading sample for ${friendlyName(sn)}...`;
+            const res = await fetch(`${api}${v.sampleUrl}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            playerEl.src = URL.createObjectURL(blob);
+            playerEl.style.display = '';
+            await playerEl.play();
+            logEl.textContent = `Sample: ${friendlyName(sn)}`;
+          } catch (err) {
+            console.error(err);
+            logEl.textContent = 'Error: ' + err.message;
+          }
+        };
+
+        const fav = document.createElement('button');
+        fav.className = 'fav-btn' + (sn === favoriteVoice ? ' is-fav' : '');
+        fav.textContent = sn === favoriteVoice ? '\u2605' : '\u2606';
+        fav.title = sn === favoriteVoice ? 'Unfavorite' : 'Set as favorite';
+        fav.onclick = (e) => {
+          e.stopPropagation();
+          if (favoriteVoice === sn) {
+            favoriteVoice = '';
+            localStorage.removeItem('tts-fav-voice');
+            logEl.textContent = 'Favorite cleared.';
+          } else {
+            favoriteVoice = sn;
+            localStorage.setItem('tts-fav-voice', sn);
+            logEl.textContent = `${friendlyName(sn)} set as favorite.`;
+          }
+          renderGrid();
+        };
+
+        card.append(avatar, info, fav, play);
+        grid.appendChild(card);
+      });
+    }
+
+    /* ---- Filter tabs ---- */
+    filterTabs.addEventListener('click', e => {
+      if (!e.target.matches('.filter-tab')) return;
+      currentFilter = e.target.dataset.filter;
+      filterTabs.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+      e.target.classList.add('active');
+      renderGrid();
+    });
+
+    /* ---- Voice dropdown sync ---- */
+    voiceSelect.addEventListener('change', () => {
+      selectedVoiceName = voiceSelect.value;
+      document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+      document.querySelectorAll('.card').forEach(c => {
+        const full = c.querySelector('.card-full');
+        if (full && full.textContent === selectedVoiceName) c.classList.add('selected');
+      });
+    });
+
+    /* ---- Word highlight rendering ---- */
+    function renderHighlight(boundaries) {
+      wordBoundaries = boundaries;
+      highlightBox.innerHTML = '';
+      highlightBox.style.display = 'block';
+      wordSpans = boundaries.map((b, i) => {
+        const span = document.createElement('span');
+        span.className = 'word';
+        span.textContent = b.text;
+        highlightBox.appendChild(span);
+        if (i < boundaries.length - 1) highlightBox.appendChild(document.createTextNode(' '));
+        return span;
+      });
+    }
+
+    function updateHighlight() {
+      if (!wordBoundaries.length) return;
+      const t = playerEl.currentTime * 10000000;
+      let activeIdx = -1;
+      for (let i = 0; i < wordBoundaries.length; i++) {
+        const b = wordBoundaries[i];
+        if (t >= b.offset && t < b.offset + b.duration) { activeIdx = i; break; }
+        if (t >= b.offset) activeIdx = i;
+      }
+      wordSpans.forEach((s, i) => s.classList.toggle('active', i === activeIdx));
+      if (activeIdx >= 0 && wordSpans[activeIdx]) {
+        wordSpans[activeIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    }
+
+    playerEl.addEventListener('timeupdate', updateHighlight);
+    playerEl.addEventListener('ended', () => wordSpans.forEach(s => s.classList.remove('active')));
+
+    /* ---- Synthesize with timing ---- */
+    async function doSynthesizeWithTiming(text, voice, format) {
+      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      const res = await fetch(`${api}/synthesize_with_timing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice, format })
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(`HTTP ${res.status}: ${msg}`);
+      }
+      return await res.json();
+    }
+
+    async function doSynthesize(text, voice, format) {
+      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      const res = await fetch(`${api}/synthesize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice, format })
+      });
+      if (!res.ok) {
+        const msg = await res.text();
+        throw new Error(`HTTP ${res.status}: ${msg}`);
+      }
+      return await res.blob();
+    }
+
+    function setLoading(on) {
+      isSynthesizing = on;
+      btn.disabled = on;
+      btn.textContent = on ? 'Generating...' : 'Synthesize';
+      loadingBar.classList.toggle('active', on);
+    }
+
+    function smartFilename(text, voice, ext) {
+      const slug = text.trim().split(/\s+/).slice(0, 5).join('-').replace(/[^a-zA-Z0-9-]/g, '').toLowerCase();
+      const vName = friendlyName(voice).replace(/\s+/g, '');
+      return `${slug || 'tts'}-${vName}.${ext}`;
+    }
+
+    function b64toBlob(b64, contentType) {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: contentType });
+    }
+
+    btn.onclick = async () => {
+      if (isSynthesizing) return;
+      const text = textArea.value;
+      if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
+      const voice = voiceSelect.value || 'en-US-AriaNeural';
+      const format = document.getElementById('format').value;
+      setLoading(true);
+      logEl.textContent = 'Requesting...';
+      try {
+        const data = await doSynthesizeWithTiming(text, voice, format);
+        const blob = b64toBlob(data.audio, data.contentType);
+        lastBlob = blob; lastExt = format; lastText = text; lastVoice = voice;
+        downloadBtn.disabled = false;
+        playerEl.src = URL.createObjectURL(blob);
+        playerEl.style.display = '';
+        renderHighlight(data.boundaries || []);
+        await playerEl.play();
+        playerEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        logEl.textContent = `Done (${format}, ${(blob.size / 1024).toFixed(1)} KB, ${(data.boundaries || []).length} words).`;
+        addHistory(text, voice, format, blob);
+      } catch (err) {
+        console.error(err);
+        logEl.textContent = 'Error: ' + err.message;
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    previewBtn.onclick = async () => {
+      if (isSynthesizing) return;
+      const voice = voiceSelect.value || 'en-US-AriaNeural';
+      setLoading(true);
+      logEl.textContent = 'Previewing...';
+      try {
+        const blob = await doSynthesize('This is a sample of the selected voice.', voice, 'mp3');
+        playerEl.src = URL.createObjectURL(blob);
+        playerEl.style.display = '';
+        await playerEl.play();
+        logEl.textContent = `Preview: ${friendlyName(voice)}`;
+      } catch (err) {
+        console.error(err);
+        logEl.textContent = 'Error: ' + err.message;
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    refreshBtn.onclick = () => loadVoices(true);
+
+    /* ---- Download ---- */
+    downloadBtn.onclick = () => {
+      if (!lastBlob) return;
+      const url = URL.createObjectURL(lastBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = smartFilename(lastText, lastVoice, lastExt);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    };
+
+    /* ---- History ---- */
+    function addHistory(text, voice, format, blob) {
+      historyArr.unshift({ text: text.slice(0, 80), voice, format, blob, ts: Date.now() });
+      if (historyArr.length > 10) historyArr.pop();
+      renderHistory();
+    }
+    function renderHistory() {
+      if (!historyArr.length) { historySection.style.display = 'none'; return; }
+      historySection.style.display = '';
+      historyList.innerHTML = '';
+      historyArr.forEach((h, i) => {
+        const row = document.createElement('div');
+        row.className = 'history-item';
+        row.innerHTML = `<span class="hi-voice">${friendlyName(h.voice)}</span><span class="hi-text">${h.text}</span>`;
+        const playBtn = document.createElement('button');
+        playBtn.className = 'btn btn-secondary';
+        playBtn.textContent = '\u25b6';
+        playBtn.onclick = () => {
+          playerEl.src = URL.createObjectURL(h.blob);
+          playerEl.style.display = '';
+          playerEl.play();
+        };
+        const dlBtn = document.createElement('button');
+        dlBtn.className = 'btn btn-secondary';
+        dlBtn.textContent = '\u2193';
+        dlBtn.onclick = () => {
+          const url = URL.createObjectURL(h.blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = smartFilename(h.text, h.voice, h.format);
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+        };
+        row.append(playBtn, dlBtn);
+        historyList.appendChild(row);
+      });
+    }
+
+    /* ---- Load from URL ---- */
+    loadUrlBtn.onclick = async () => {
+      const url = urlInput.value.trim();
+      if (!url) { logEl.textContent = 'Enter a URL first.'; return; }
+      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      logEl.textContent = 'Fetching page text...';
+      loadUrlBtn.disabled = true;
+      loadUrlBtn.textContent = 'Loading...';
+      try {
+        const res = await fetch(`${api}/extract_text`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(`HTTP ${res.status}: ${msg}`);
+        }
+        const data = await res.json();
+        textArea.value = data.text;
+        updateCount();
+        logEl.textContent = `Loaded "${data.title || url}" (${data.chars} chars). Ready to synthesize.`;
+      } catch (err) {
+        console.error(err);
+        logEl.textContent = 'Error loading URL: ' + err.message;
+      } finally {
+        loadUrlBtn.disabled = false;
+        loadUrlBtn.textContent = 'Load';
+      }
+    };
+    urlInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); loadUrlBtn.click(); }
+    });
+
+    /* ---- Init ---- */
+    loadVoices();
+  </script>
+</body>
+</html>
