@@ -62,6 +62,14 @@
     .btn-secondary:hover:not(:disabled) { background: var(--bg2); }
     .btn-secondary:disabled { opacity: .4; cursor: not-allowed; }
 
+    /* Export dropdown */
+    .export-dropdown { position: relative; display: inline-block; }
+    .export-menu { position: absolute; top: 100%; left: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px var(--card-shadow); z-index: 100; min-width: 150px; }
+    .export-option { display: block; width: 100%; padding: 8px 12px; border: none; background: none; text-align: left; font-size: 13px; color: var(--fg); cursor: pointer; border-radius: 0; }
+    .export-option:first-child { border-radius: 6px 6px 0 0; }
+    .export-option:last-child { border-radius: 0 0 6px 6px; }
+    .export-option:hover { background: var(--bg2); }
+
     /* Player & log */
     audio { width: 100%; margin-top: 10px; }
     .log { margin-top: 6px; color: var(--fg2); font-size: 12px; min-height: 18px; }
@@ -79,7 +87,7 @@
     .advanced-content.open { display: block; }
 
     /* Word highlight display */
-    .highlight-box { margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); line-height: 1.8; font-size: 16px; min-height: 60px; display: none; }
+    .highlight-box { margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); line-height: 1.8; font-size: 16px; min-height: 60px; max-height: 300px; overflow-y: auto; display: none; }
     .highlight-box .word { display: inline; padding: 1px 2px; border-radius: 3px; transition: background .08s; }
     .highlight-box .word.active { background: var(--highlight); font-weight: 600; }
 
@@ -129,7 +137,7 @@
     <div class="left-col">
       <label>Load from URL</label>
       <div class="url-row">
-        <input id="url-input" type="text" placeholder="https://crucial-conversations.netlify.app/resources/ebook/chapter_12" />
+        <input id="url-input" type="text" placeholder="https://example.com/article" />
         <button class="btn btn-secondary" id="load-url">Load</button>
       </div>
 
@@ -162,6 +170,14 @@
       <div class="btn-row">
         <button class="btn btn-primary" id="go">Synthesize</button>
         <button class="btn btn-primary" id="download" disabled>Download</button>
+        <div class="export-dropdown">
+          <button class="btn btn-secondary" id="export-btn">Export ▾</button>
+          <div class="export-menu" id="export-menu" style="display:none;">
+            <button class="export-option" data-format="json">JSON Bundle</button>
+            <button class="export-option" data-format="webvtt">WebVTT Captions</button>
+            <button class="export-option" data-format="player">Player Code</button>
+          </div>
+        </div>
         <button class="btn btn-secondary" id="preview">Preview voice</button>
         <button class="btn btn-secondary" id="refresh">Refresh voices</button>
       </div>
@@ -412,6 +428,16 @@
       });
     }
 
+    /* Auto-scroll pause: user scroll suspends auto-scroll for 3s */
+    let userScrolled = false;
+    let scrollTimer = null;
+    highlightBox.addEventListener('scroll', () => {
+      if (highlightBox._autoScrolling) return;
+      userScrolled = true;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => { userScrolled = false; }, 3000);
+    }, { passive: true });
+
     function updateHighlight() {
       if (!wordBoundaries.length) return;
       const t = playerEl.currentTime * 10000000;
@@ -422,13 +448,15 @@
         if (t >= b.offset) activeIdx = i;
       }
       wordSpans.forEach((s, i) => s.classList.toggle('active', i === activeIdx));
-      if (activeIdx >= 0 && wordSpans[activeIdx]) {
+      if (activeIdx >= 0 && wordSpans[activeIdx] && !userScrolled) {
+        highlightBox._autoScrolling = true;
         wordSpans[activeIdx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        setTimeout(() => { highlightBox._autoScrolling = false; }, 100);
       }
     }
 
     playerEl.addEventListener('timeupdate', updateHighlight);
-    playerEl.addEventListener('ended', () => wordSpans.forEach(s => s.classList.remove('active')));
+    playerEl.addEventListener('ended', () => { wordSpans.forEach(s => s.classList.remove('active')); userScrolled = false; });
 
     /* ---- Synthesize with timing ---- */
     async function doSynthesizeWithTiming(text, voice, format) {
@@ -527,6 +555,120 @@
     };
 
     refreshBtn.onclick = () => loadVoices(true);
+
+    /* ---- Export ---- */
+    const exportBtn = document.getElementById('export-btn');
+    const exportMenu = document.getElementById('export-menu');
+    
+    exportBtn.onclick = (e) => {
+      e.stopPropagation();
+      exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none';
+    };
+    
+    document.addEventListener('click', () => {
+      exportMenu.style.display = 'none';
+    });
+    
+    exportMenu.onclick = (e) => e.stopPropagation();
+    
+    document.querySelectorAll('.export-option').forEach(btn => {
+      btn.onclick = async () => {
+        const format = btn.dataset.format;
+        exportMenu.style.display = 'none';
+        
+        if (!lastText) {
+          logEl.textContent = 'Please synthesize something first.';
+          return;
+        }
+        
+        if (format === 'player') {
+          // Show embed code modal
+          const dataJson = JSON.stringify({
+            text: lastText,
+            voice: lastVoice,
+            format: lastExt,
+            audio: 'BASE64_AUDIO_DATA_HERE',
+            contentType: 'audio/mpeg',
+            boundaries: wordBoundaries,
+            metadata: {
+              words: wordBoundaries.length,
+              duration_ms: wordBoundaries[wordBoundaries.length - 1]?.offset + wordBoundaries[wordBoundaries.length - 1]?.duration || 0
+            }
+          }, null, 2);
+          const embedCode = '<div id="tts-player"><\/div>\n<scr' + 'ipt src="tts-player.js"><\/scr' + 'ipt>\n<scr' + 'ipt>\n  TTSPlayer.init({\n    container: \'#tts-player\',\n    data: ' + dataJson + '\n  });\n<\/scr' + 'ipt>';
+
+          const modal = document.createElement('div');
+          modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
+          const modalContent = document.createElement('div');
+          modalContent.style.cssText = 'background:var(--card-bg);padding:20px;border-radius:8px;max-width:600px;max-height:80vh;overflow:auto;';
+          const h = document.createElement('h3');
+          h.textContent = 'Embed Code';
+          const ta = document.createElement('textarea');
+          ta.style.cssText = 'width:100%;height:200px;font-family:monospace;font-size:12px;';
+          ta.value = embedCode;
+          const btnRow = document.createElement('div');
+          btnRow.style.cssText = 'margin-top:10px;display:flex;gap:8px;';
+          const closeBtn = document.createElement('button');
+          closeBtn.textContent = 'Close';
+          closeBtn.className = 'btn btn-secondary';
+          closeBtn.onclick = () => modal.remove();
+          const copyBtn = document.createElement('button');
+          copyBtn.textContent = 'Copy';
+          copyBtn.className = 'btn btn-primary';
+          copyBtn.onclick = () => { navigator.clipboard.writeText(ta.value); copyBtn.textContent = 'Copied!'; setTimeout(() => copyBtn.textContent = 'Copy', 2000); };
+          btnRow.append(closeBtn, copyBtn);
+          modalContent.append(h, ta, btnRow);
+          modal.appendChild(modalContent);
+          modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+          document.body.appendChild(modal);
+          return;
+        }
+        
+        // Handle JSON and WebVTT export
+        setLoading(true);
+        logEl.textContent = `Exporting ${format}...`;
+        
+        try {
+          const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+          const res = await fetch(`${api}/export`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: lastText, voice: lastVoice, format: lastExt })
+          });
+          
+          if (!res.ok) {
+            const msg = await res.text();
+            throw new Error(`HTTP ${res.status}: ${msg}`);
+          }
+          
+          if (format === 'json') {
+            const data = await res.json();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = smartFilename(lastText, lastVoice, 'json');
+            a.click();
+            URL.revokeObjectURL(url);
+            logEl.textContent = `Exported JSON bundle (${data.metadata.words} words).`;
+          } else if (format === 'webvtt') {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = smartFilename(lastText, lastVoice, 'vtt');
+            a.click();
+            URL.revokeObjectURL(url);
+            logEl.textContent = 'Exported WebVTT captions.';
+          }
+        } catch (err) {
+          console.error(err);
+          logEl.textContent = 'Export error: ' + err.message;
+        } finally {
+          setLoading(false);
+        }
+      };
+    });
 
     /* ---- Download ---- */
     downloadBtn.onclick = () => {

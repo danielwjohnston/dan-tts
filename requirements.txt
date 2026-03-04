@@ -3,3 +3,5 @@ uvicorn[standard]
 edge-tts
 pydantic
 starlette
+aiohttp
+beautifulsoup4

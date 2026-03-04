@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TTS Player Demo</title>
+</head>
+<body>
+  <h1>TTS Player Demo</h1>
+  <p>This demonstrates the standalone TTS player with exported data.</p>
+  
+  <div id="tts-player"></div>
+  
+  <script src="static/tts-player.js"></script>
+  <script>
+    // Sample data - in production this would come from an export
+    const sampleData = {
+      "text": "This is a demonstration of the standalone TTS player. It can load exported audio and timing data to provide synchronized highlighting playback on any website.",
+      "voice": "en-US-AriaNeural",
+      "format": "mp3",
+      "audio": "SUQzAwAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAAzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjU0AAAAAAAAAAAAAAAAJAM=",
+      "contentType": "audio/mpeg",
+      "boundaries": [
+        {"text": "This", "offset": 0, "duration": 300000},
+        {"text": "is", "offset": 300000, "duration": 200000},
+        {"text": "a", "offset": 500000, "duration": 150000},
+        {"text": "demonstration", "offset": 650000, "duration": 800000},
+        {"text": "of", "offset": 1450000, "duration": 200000},
+        {"text": "the", "offset": 1650000, "duration": 200000},
+        {"text": "standalone", "offset": 1850000, "duration": 600000},
+        {"text": "TTS", "offset": 2450000, "duration": 400000},
+        {"text": "player.", "offset": 2850000, "duration": 500000},
+        {"text": "It", "offset": 3350000, "duration": 200000},
+        {"text": "can", "offset": 3550000, "duration": 250000},
+        {"text": "load", "offset": 3800000, "duration": 300000},
+        {"text": "exported", "offset": 4100000, "duration": 500000},
+        {"text": "audio", "offset": 4600000, "duration": 400000},
+        {"text": "and", "offset": 5000000, "duration": 250000},
+        {"text": "timing", "offset": 5250000, "duration": 400000},
+        {"text": "data", "offset": 5650000, "duration": 300000},
+        {"text": "to", "offset": 5950000, "duration": 200000},
+        {"text": "provide", "offset": 6150000, "duration": 500000},
+        {"text": "synchronized", "offset": 6650000, "duration": 700000},
+        {"text": "highlighting", "offset": 7350000, "duration": 600000},
+        {"text": "playback", "offset": 7950000, "duration": 500000},
+        {"text": "on", "offset": 8450000, "duration": 200000},
+        {"text": "any", "offset": 8650000, "duration": 250000},
+        {"text": "website.", "offset": 8900000, "duration": 600000}
+      ],
+      "metadata": {
+        "words": 25,
+        "duration_ms": 9500000,
+        "generated_at": "2026-03-03T00:00:00Z"
+      }
+    };
+    
+    TTSPlayer.init({
+      container: '#tts-player',
+      data: sampleData
+    });
+  </script>
+</body>
+</html>

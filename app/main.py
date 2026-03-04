@@ -17,6 +17,7 @@ import edge_tts
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import FileResponse, Response
@@ -47,6 +48,9 @@ class PermissionsPolicyMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(PermissionsPolicyMiddleware)
+
+# Mount static files for standalone player
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 class SynthesisRequest(BaseModel):
@@ -280,6 +284,53 @@ async def extract_text(payload: ExtractTextRequest):
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
     return {"text": text, "title": title, "chars": len(text)}
+
+
+@app.post("/export")
+async def export_timing(payload: SynthesisRequest, format: str = "json"):
+    if not payload.text.strip():
+        raise HTTPException(status_code=400, detail="Text is required")
+    
+    if format not in ["json", "webvtt"]:
+        raise HTTPException(status_code=400, detail="Format must be 'json' or 'webvtt'")
+    
+    # Get audio and timing data
+    mp3_bytes, boundaries = await synthesize_with_boundaries(payload.text, payload.voice)
+    
+    if format == "json":
+        # JSON bundle with audio base64 encoded
+        audio_b64 = base64.b64encode(mp3_bytes).decode("ascii")
+        return {
+            "text": payload.text,
+            "voice": payload.voice,
+            "format": payload.format,
+            "audio": audio_b64,
+            "contentType": "audio/mpeg",
+            "boundaries": boundaries,
+            "metadata": {
+                "words": len(boundaries),
+                "duration_ms": boundaries[-1]["offset"] + boundaries[-1]["duration"] if boundaries else 0,
+                "generated_at": "2026-03-03T00:00:00Z"
+            }
+        }
+    elif format == "webvtt":
+        # WebVTT caption format
+        vtt_lines = ["WEBVTT", ""]
+        for boundary in boundaries:
+            start_ms = boundary["offset"] // 10000  # Convert to milliseconds
+            end_ms = (boundary["offset"] + boundary["duration"]) // 10000
+            
+            start_time = f"{start_ms//60000:02d}:{(start_ms%60000)//1000:02d}.{start_ms%1000:03d}"
+            end_time = f"{end_ms//60000:02d}:{(end_ms%60000)//1000:02d}.{end_ms%1000:03d}"
+            
+            vtt_lines.append(f"{start_time} --> {end_time}")
+            vtt_lines.append(boundary["text"])
+            vtt_lines.append("")
+        
+        vtt_content = "\n".join(vtt_lines)
+        return Response(vtt_content, media_type="text/vtt", headers={
+            "Content-Disposition": f"attachment; filename=\"captions.vtt\""
+        })
 
 
 @app.get("/health")
