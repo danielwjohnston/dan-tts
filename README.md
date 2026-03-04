@@ -5,9 +5,15 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 
 ## Features
 
-- Edge TTS (no key), configurable voice
-- Formats: mp3 (direct), m4a, ogg, flac (via ffmpeg)
-- Simple FastAPI service with CORS open for local testing
+- **17 Edge TTS voices** (en-US, no API key required)
+- **Formats**: mp3 (direct), m4a, ogg, flac (via ffmpeg)
+- **Word-level highlighting** — real-time word tracking during playback
+- **Auto-scroll pause** — scroll freely during playback without rubber-banding
+- **URL text extraction** — paste a URL, load page text for read-aloud
+- **Export** — JSON bundle (audio + timing), WebVTT captions, standalone player embed code
+- **Standalone player** (`static/tts-player.js`) — drop on any site for highlighting playback
+- **Voice preview** — pre-rendered samples, gender filter tabs, favorites (localStorage)
+- **Dark mode**, smart filenames, download, history, Ctrl+Enter shortcut
 - Health check at `/health`
 
 ## Setup
