@@ -282,7 +282,11 @@ async def _assert_public_host(url: str) -> None:
 
 async def _fetch_html(url: str) -> str:
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; DanTTS/0.1; +https://github.com/danielwjohnston/dan-tts)",
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        }
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), headers=headers) as session:
             # Follow redirects manually so every hop passes the SSRF check
             for _ in range(MAX_REDIRECTS + 1):
                 await _assert_public_host(url)
@@ -292,10 +296,12 @@ async def _fetch_html(url: str) -> str:
                         continue
                     if resp.status != 200:
                         raise HTTPException(status_code=502, detail=f"URL returned HTTP {resp.status}")
-                    body = await resp.content.read(MAX_FETCH_BYTES + 1)
-                    if len(body) > MAX_FETCH_BYTES:
-                        raise HTTPException(status_code=413, detail="Page is too large")
-                    return body.decode(resp.get_encoding() if resp.charset else "utf-8", errors="replace")
+                    body = bytearray()
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        body.extend(chunk)
+                        if len(body) > MAX_FETCH_BYTES:
+                            raise HTTPException(status_code=413, detail="Page is too large")
+                    return bytes(body).decode(resp.get_encoding() if resp.charset else "utf-8", errors="replace")
             raise HTTPException(status_code=502, detail="Too many redirects")
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {exc}")
@@ -328,6 +334,13 @@ async def extract_text(payload: ExtractTextRequest):
         raise error
 
     soup = BeautifulSoup(html, "html.parser")
+    # Grab meta descriptions before stripping tags, as a fallback for JS-rendered pages
+    meta_desc = ""
+    for attrs in ({"property": "og:description"}, {"name": "description"}, {"name": "twitter:description"}):
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content", "").strip():
+            meta_desc = tag["content"].strip()
+            break
     for tag in soup(["script", "style", "nav", "header", "footer", "noscript", "svg", "img"]):
         tag.decompose()
     # Try to get main content first
@@ -338,6 +351,13 @@ async def extract_text(payload: ExtractTextRequest):
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    if len(text.split()) < 5:
+        if not meta_desc:
+            raise HTTPException(
+                status_code=422,
+                detail="No readable text found; the page is probably rendered with JavaScript",
+            )
+        text = "\n\n".join(part for part in (title, meta_desc) if part)
     return {"text": text, "title": title, "chars": len(text)}
 
 
