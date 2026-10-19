@@ -6,11 +6,15 @@ Dan's TTS Project (FastAPI)
 
 import asyncio
 import base64
+import ipaddress
 import re
+import socket
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
+from urllib.parse import urljoin, urlparse
 
 import aiohttp
 import edge_tts
@@ -28,6 +32,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 TESTER_HTML = BASE_DIR / "tester.html"
 SAMPLE_TEXT = "This is a sample of the selected voice."
 SAMPLES_DIR = BASE_DIR / "samples"
+MAX_TEXT_CHARS = 20000
+MAX_FETCH_BYTES = 5 * 1024 * 1024
+MAX_REDIRECTS = 5
+VOICE_NAME_RE = re.compile(r"^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$")
 
 _voice_cache: Optional[List[Dict]] = None
 
@@ -54,7 +62,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 class SynthesisRequest(BaseModel):
-    text: str = Field(..., description="Plain text or SSML to synthesize")
+    text: str = Field(..., max_length=MAX_TEXT_CHARS, description="Plain text or SSML to synthesize")
     voice: str = Field(DEFAULT_VOICE, description="Microsoft Edge voice name")
     format: SUPPORTED_FORMATS = Field(
         "mp3", description="Output format: mp3 (direct), m4a, ogg, or flac"
@@ -246,6 +254,8 @@ async def ensure_sample(voice: str) -> Path:
 
 @app.get("/samples/{voice}")
 async def sample_audio(voice: str):
+    if not VOICE_NAME_RE.match(voice):
+        raise HTTPException(status_code=400, detail="Invalid voice name")
     try:
         path = await ensure_sample(voice)
         return FileResponse(path, media_type="audio/mpeg")
@@ -255,6 +265,21 @@ async def sample_audio(voice: str):
         raise HTTPException(status_code=500, detail=f"Sample generation failed: {exc}")
 
 
+async def _assert_public_host(url: str) -> None:
+    """Reject URLs that resolve to private, loopback or link-local addresses (SSRF guard)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parsed.hostname, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="Could not resolve URL host")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global:
+            raise HTTPException(status_code=400, detail="URL host is not allowed")
+
+
 @app.post("/extract_text")
 async def extract_text(payload: ExtractTextRequest):
     url = payload.url.strip()
@@ -262,11 +287,23 @@ async def extract_text(payload: ExtractTextRequest):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status != 200:
-                    raise HTTPException(status_code=502, detail=f"URL returned HTTP {resp.status}")
-                html = await resp.text()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            # Follow redirects manually so every hop passes the SSRF check
+            for _ in range(MAX_REDIRECTS + 1):
+                await _assert_public_host(url)
+                async with session.get(url, allow_redirects=False) as resp:
+                    if resp.status in (301, 302, 303, 307, 308) and "Location" in resp.headers:
+                        url = urljoin(url, resp.headers["Location"])
+                        continue
+                    if resp.status != 200:
+                        raise HTTPException(status_code=502, detail=f"URL returned HTTP {resp.status}")
+                    body = await resp.content.read(MAX_FETCH_BYTES + 1)
+                    if len(body) > MAX_FETCH_BYTES:
+                        raise HTTPException(status_code=413, detail="Page is too large")
+                    html = body.decode(resp.get_encoding() if resp.charset else "utf-8", errors="replace")
+                    break
+            else:
+                raise HTTPException(status_code=502, detail="Too many redirects")
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {exc}")
     except asyncio.TimeoutError:
@@ -310,7 +347,7 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
             "metadata": {
                 "words": len(boundaries),
                 "duration_ms": boundaries[-1]["offset"] + boundaries[-1]["duration"] if boundaries else 0,
-                "generated_at": "2026-03-03T00:00:00Z"
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             }
         }
     elif format == "webvtt":

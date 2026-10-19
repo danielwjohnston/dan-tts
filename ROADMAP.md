@@ -19,7 +19,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 ## Longer-Term / Experimental
 
 - **Video generation** — Use ffmpeg to create MP4 videos with synchronized text highlighting (multiple styles: typewriter, split-screen, animated slides)
-- **Deployment** — Host on Railway, Fly.io, or similar so it's always accessible without running locally
+- ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API)
 - **CMS integrations** — WordPress shortcode, Ghost embed, static site generator plugins
 - **Multi-language support** — Expand beyond en-US voices
 - **Custom voice profiles** — Save per-project voice + speed + format preferences
