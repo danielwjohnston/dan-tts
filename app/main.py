@@ -361,13 +361,24 @@ async def extract_text(payload: ExtractTextRequest):
     return {"text": text, "title": title, "chars": len(text)}
 
 
+def _boundary_ms(boundary: dict) -> tuple:
+    """Word boundary offsets/durations are in 100ns ticks; return (start_ms, end_ms)."""
+    start = boundary["offset"] // 10000
+    return start, (boundary["offset"] + boundary["duration"]) // 10000
+
+
+def _timestamp(ms: int, frac_sep: str) -> str:
+    """HH:MM:SS<sep>mmm, '.' for WebVTT and ',' for SRT."""
+    return f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d}{frac_sep}{ms % 1000:03d}"
+
+
 @app.post("/export")
 async def export_timing(payload: SynthesisRequest, format: str = "json"):
     if not payload.text.strip():
         raise HTTPException(status_code=400, detail="Text is required")
     
-    if format not in ["json", "webvtt"]:
-        raise HTTPException(status_code=400, detail="Format must be 'json' or 'webvtt'")
+    if format not in ["json", "webvtt", "srt"]:
+        raise HTTPException(status_code=400, detail="Format must be 'json', 'webvtt' or 'srt'")
     
     # Get audio and timing data
     mp3_bytes, boundaries = await synthesize_with_boundaries(payload.text, payload.voice)
@@ -389,22 +400,20 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
             }
         }
     elif format == "webvtt":
-        # WebVTT caption format
-        vtt_lines = ["WEBVTT", ""]
-        for boundary in boundaries:
-            start_ms = boundary["offset"] // 10000  # Convert to milliseconds
-            end_ms = (boundary["offset"] + boundary["duration"]) // 10000
-            
-            start_time = f"{start_ms//60000:02d}:{(start_ms%60000)//1000:02d}.{start_ms%1000:03d}"
-            end_time = f"{end_ms//60000:02d}:{(end_ms%60000)//1000:02d}.{end_ms%1000:03d}"
-            
-            vtt_lines.append(f"{start_time} --> {end_time}")
-            vtt_lines.append(boundary["text"])
-            vtt_lines.append("")
-        
-        vtt_content = "\n".join(vtt_lines)
-        return Response(vtt_content, media_type="text/vtt", headers={
-            "Content-Disposition": f"attachment; filename=\"captions.vtt\""
+        lines = ["WEBVTT", ""]
+        for b in boundaries:
+            start, end = _boundary_ms(b)
+            lines += [f"{_timestamp(start, '.')} --> {_timestamp(end, '.')}", b["text"], ""]
+        return Response("\n".join(lines), media_type="text/vtt", headers={
+            "Content-Disposition": 'attachment; filename="captions.vtt"'
+        })
+    else:
+        lines = []
+        for i, b in enumerate(boundaries, 1):
+            start, end = _boundary_ms(b)
+            lines += [str(i), f"{_timestamp(start, ',')} --> {_timestamp(end, ',')}", b["text"], ""]
+        return Response("\n".join(lines), media_type="application/x-subrip", headers={
+            "Content-Disposition": 'attachment; filename="captions.srt"'
         })
 
 

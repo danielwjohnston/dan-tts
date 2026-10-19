@@ -4,7 +4,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 
 ## Near-Term
 
-- **SRT caption export** — Add SRT format alongside existing WebVTT
+- ~~**SRT caption export**~~ — Done
 - **Paragraph chunking** — Split long text into paragraphs, synthesize sequentially with progress indicator
 - **Batch synthesis** — Queue multiple texts, download as zip
 - **Improved embed workflow** — Export a self-contained HTML file (audio + player + timing in one file) instead of requiring 3 separate files

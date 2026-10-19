@@ -171,6 +171,7 @@
           <div class="export-menu" id="export-menu" style="display:none;">
             <button class="export-option" data-format="json">JSON Bundle</button>
             <button class="export-option" data-format="webvtt">WebVTT Captions</button>
+            <button class="export-option" data-format="srt">SRT Captions</button>
             <button class="export-option" data-format="player">Player Code</button>
           </div>
         </div>
@@ -610,13 +611,13 @@
           return;
         }
         
-        // Handle JSON and WebVTT export
+        // Handle JSON, WebVTT and SRT export
         setLoading(true);
         logEl.textContent = `Exporting ${format}...`;
         
         try {
           const api = document.getElementById('api').value.trim().replace(/\/$/, '');
-          const res = await fetch(`${api}/export`, {
+          const res = await fetch(`${api}/export?format=${format}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: lastText, voice: lastVoice, format: lastExt })
@@ -637,15 +638,16 @@
             a.click();
             URL.revokeObjectURL(url);
             logEl.textContent = `Exported JSON bundle (${data.metadata.words} words).`;
-          } else if (format === 'webvtt') {
+          } else {
+            const ext = format === 'webvtt' ? 'vtt' : 'srt';
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = smartFilename(lastText, lastVoice, 'vtt');
+            a.download = smartFilename(lastText, lastVoice, ext);
             a.click();
             URL.revokeObjectURL(url);
-            logEl.textContent = 'Exported WebVTT captions.';
+            logEl.textContent = `Exported ${format === 'webvtt' ? 'WebVTT' : 'SRT'} captions.`;
           }
         } catch (err) {
           console.error(err);

@@ -10,7 +10,7 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 - **Word-level highlighting** — real-time word tracking during playback
 - **Auto-scroll pause** — scroll freely during playback without rubber-banding
 - **URL text extraction** — paste a URL, load page text for read-aloud
-- **Export** — JSON bundle (audio + timing), WebVTT captions, standalone player embed code
+- **Export** — JSON bundle (audio + timing), WebVTT and SRT captions, standalone player embed code
 - **Standalone player** (`static/tts-player.js`) — drop on any site for highlighting playback
 - **Voice preview** — pre-rendered samples, gender filter tabs, favorites (localStorage)
 - **Dark mode**, smart filenames, download, history, Ctrl+Enter shortcut
@@ -79,3 +79,12 @@ The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is stati
 3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Edge TTS and outbound HTTP are stubbed, so the suite runs offline. CI runs it on every PR.
