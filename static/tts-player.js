@@ -29,9 +29,10 @@ class TTSPlayer {
         }
         .tts-highlight {
           padding: 16px;
-          border: 1px solid #e2e2e2;
+          border: 1px solid var(--border, #e2e2e2);
           border-radius: 8px;
-          background: #f7f7f8;
+          background: var(--bg2, #f7f7f8);
+          color: var(--fg, inherit);
           line-height: 1.8;
           font-size: 16px;
           min-height: 60px;
@@ -45,12 +46,12 @@ class TTSPlayer {
           transition: background .08s;
         }
         .tts-word.active {
-          background: #fef08a;
+          background: var(--highlight, #fef08a);
           font-weight: 600;
         }
         .tts-meta {
           font-size: 12px;
-          color: #666;
+          color: var(--fg2, #666);
           margin-top: 4px;
         }
       </style>
