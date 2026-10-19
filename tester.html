@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dan's TTS Tester</title>
+  <link rel="stylesheet" href="static/themes.css" />
+  <script src="static/theme.js"></script>
   <style>
     :root {
       --bg: #ffffff; --bg2: #f7f7f8; --fg: #111; --fg2: #555; --border: #e2e2e2;
@@ -12,12 +14,6 @@
       --avatar-f: linear-gradient(135deg, #a855f7, #ec4899);
       --avatar-m: linear-gradient(135deg, #3b82f6, #14b8a6);
       --input-bg: #fff; --highlight: #fef08a;
-    }
-    html.dark {
-      --bg: #0f0f0f; --bg2: #1a1a1a; --fg: #e8e8e8; --fg2: #999; --border: #333;
-      --primary: #6366f1; --primary-hover: #818cf8; --primary-fg: #fff;
-      --card-bg: #1e1e1e; --card-shadow: rgba(0,0,0,0.3);
-      --input-bg: #1e1e1e; --highlight: #854d0e;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--fg); transition: background .2s, color .2s; }
@@ -128,7 +124,7 @@
   <div class="topbar">
     <h1>Dan's TTS</h1>
     <div class="topbar-actions">
-      <button class="icon-btn" id="theme-toggle" title="Toggle dark mode">Dark</button>
+      <select class="icon-btn theme-select" aria-label="Theme" title="Theme"></select>
     </div>
   </div>
 
@@ -232,7 +228,6 @@
     const clearBtn = document.getElementById('clear-text');
     const loadingBar = document.getElementById('loading');
     const playerEl = document.getElementById('player');
-    const themeBtn = document.getElementById('theme-toggle');
     const advToggle = document.getElementById('adv-toggle');
     const advContent = document.getElementById('adv-content');
     const historySection = document.getElementById('history-section');
@@ -252,15 +247,6 @@
     const historyArr = [];
     let wordBoundaries = [];
     let wordSpans = [];
-
-    /* ---- Dark mode ---- */
-    function setTheme(dark) {
-      document.documentElement.classList.toggle('dark', dark);
-      themeBtn.textContent = dark ? 'Light' : 'Dark';
-      localStorage.setItem('tts-theme', dark ? 'dark' : 'light');
-    }
-    themeBtn.onclick = () => setTheme(!document.documentElement.classList.contains('dark'));
-    if (localStorage.getItem('tts-theme') === 'dark' || (!localStorage.getItem('tts-theme') && matchMedia('(prefers-color-scheme:dark)').matches)) setTheme(true);
 
     /* ---- Advanced toggle ---- */
     advToggle.onclick = () => {
@@ -592,7 +578,7 @@
             boundaries: wordBoundaries,
             metadata: {
               words: wordBoundaries.length,
-              duration_ms: wordBoundaries[wordBoundaries.length - 1]?.offset + wordBoundaries[wordBoundaries.length - 1]?.duration || 0
+              duration_ms: Math.round(((wordBoundaries[wordBoundaries.length - 1]?.offset + wordBoundaries[wordBoundaries.length - 1]?.duration) || 0) / 10000)
             }
           }, null, 2);
           const embedCode = '<div id="tts-player"><\/div>\n<scr' + 'ipt src="tts-player.js"><\/scr' + 'ipt>\n<scr' + 'ipt>\n  TTSPlayer.init({\n    container: \'#tts-player\',\n    data: ' + dataJson + '\n  });\n<\/scr' + 'ipt>';

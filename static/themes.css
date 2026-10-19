@@ -1,0 +1,43 @@
+/* Theme families: Default (light/dark), Nord (Polar Night / Snow Storm), Dracula (Dracula / Alucard).
+   Applied via <html data-theme="...">; :root in each page holds the default light tokens. */
+html[data-theme="dark"] {
+  --bg: #0f0f0f; --bg2: #1a1a1a; --fg: #e8e8e8; --fg2: #999; --border: #333;
+  --primary: #6366f1; --primary-hover: #818cf8; --primary-fg: #fff;
+  --card-bg: #1e1e1e; --card-shadow: rgba(0,0,0,0.3);
+  --input-bg: #1e1e1e; --highlight: #854d0e;
+  color-scheme: dark;
+}
+html[data-theme="nord"] {
+  --bg: #2e3440; --bg2: #3b4252; --fg: #eceff4; --fg2: #d8dee9; --border: #4c566a;
+  --primary: #88c0d0; --primary-hover: #8fbcbb; --primary-fg: #2e3440;
+  --card-bg: #3b4252; --card-shadow: rgba(0,0,0,0.3);
+  --input-bg: #434c5e; --highlight: #5e81ac;
+  --avatar-f: linear-gradient(135deg, #b48ead, #bf616a);
+  --avatar-m: linear-gradient(135deg, #5e81ac, #88c0d0);
+  color-scheme: dark;
+}
+html[data-theme="nord-light"] {
+  --bg: #eceff4; --bg2: #e5e9f0; --fg: #2e3440; --fg2: #4c566a; --border: #d8dee9;
+  --primary: #5e81ac; --primary-hover: #81a1c1; --primary-fg: #eceff4;
+  --card-bg: #f4f6f9; --card-shadow: rgba(46,52,64,0.08);
+  --input-bg: #f4f6f9; --highlight: #ebcb8b;
+  --avatar-f: linear-gradient(135deg, #b48ead, #bf616a);
+  --avatar-m: linear-gradient(135deg, #5e81ac, #88c0d0);
+}
+html[data-theme="dracula"] {
+  --bg: #282a36; --bg2: #21222c; --fg: #f8f8f2; --fg2: #a4b0d8; --border: #44475a;
+  --primary: #bd93f9; --primary-hover: #ff79c6; --primary-fg: #282a36;
+  --card-bg: #343746; --card-shadow: rgba(0,0,0,0.35);
+  --input-bg: #343746; --highlight: #6272a4;
+  --avatar-f: linear-gradient(135deg, #ff79c6, #bd93f9);
+  --avatar-m: linear-gradient(135deg, #8be9fd, #50fa7b);
+  color-scheme: dark;
+}
+html[data-theme="alucard"] {
+  --bg: #fffbeb; --bg2: #f5f0dc; --fg: #1f1f1f; --fg2: #635d97; --border: #cfcfde;
+  --primary: #644ac9; --primary-hover: #a3144d; --primary-fg: #fffbeb;
+  --card-bg: #fffdf5; --card-shadow: rgba(31,31,31,0.08);
+  --input-bg: #fffdf5; --highlight: #e6d9a6;
+  --avatar-f: linear-gradient(135deg, #a3144d, #644ac9);
+  --avatar-m: linear-gradient(135deg, #036a96, #14710a);
+}

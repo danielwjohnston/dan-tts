@@ -346,7 +346,7 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
             "boundaries": boundaries,
             "metadata": {
                 "words": len(boundaries),
-                "duration_ms": boundaries[-1]["offset"] + boundaries[-1]["duration"] if boundaries else 0,
+                "duration_ms": (boundaries[-1]["offset"] + boundaries[-1]["duration"]) // 10000 if boundaries else 0,
                 "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             }
         }
