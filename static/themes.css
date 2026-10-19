@@ -1,4 +1,5 @@
-/* Theme families: Default (light/dark), Nord (Polar Night / Snow Storm), Dracula (Dracula / Alucard).
+/* Theme families: Default (light/dark), Nord (Polar Night / Snow Storm), Dracula (Dracula / Alucard),
+   Olive Garden Feast (Harvest light / Black Forest dark).
    Applied via <html data-theme="...">; :root in each page holds the default light tokens. */
 html[data-theme="dark"] {
   --bg: #0f0f0f; --bg2: #1a1a1a; --fg: #e8e8e8; --fg2: #999; --border: #333;
@@ -40,4 +41,22 @@ html[data-theme="alucard"] {
   --input-bg: #fffdf5; --highlight: #e6d9a6;
   --avatar-f: linear-gradient(135deg, #a3144d, #644ac9);
   --avatar-m: linear-gradient(135deg, #036a96, #14710a);
+}
+/* Olive Garden Feast: Olive Leaf #606C38, Black Forest #283618, Cornsilk #FEFAE0, Light Caramel #DDA15E, Copper #BC6C25 */
+html[data-theme="olive"] {
+  --bg: #fefae0; --bg2: #f4eecb; --fg: #283618; --fg2: #606c38; --border: #e2d8ab;
+  --primary: #bc6c25; --primary-hover: #a35b1c; --primary-fg: #fefae0;
+  --card-bg: #fffdf0; --card-shadow: rgba(40,54,24,0.08);
+  --input-bg: #fffdf0; --highlight: #dda15e;
+  --avatar-f: linear-gradient(135deg, #bc6c25, #dda15e);
+  --avatar-m: linear-gradient(135deg, #283618, #606c38);
+}
+html[data-theme="olive-dark"] {
+  --bg: #283618; --bg2: #1f2a12; --fg: #fefae0; --fg2: #cfd0a8; --border: #4a5a2c;
+  --primary: #dda15e; --primary-hover: #e8b77e; --primary-fg: #283618;
+  --card-bg: #323f20; --card-shadow: rgba(0,0,0,0.35);
+  --input-bg: #323f20; --highlight: #bc6c25;
+  --avatar-f: linear-gradient(135deg, #bc6c25, #dda15e);
+  --avatar-m: linear-gradient(135deg, #606c38, #a3b06a);
+  color-scheme: dark;
 }

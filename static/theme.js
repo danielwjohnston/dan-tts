@@ -3,7 +3,8 @@
   var THEMES = [
     ['light', 'Default Light'], ['dark', 'Default Dark'],
     ['nord', 'Nord'], ['nord-light', 'Nord Light'],
-    ['dracula', 'Dracula'], ['alucard', 'Alucard (Dracula Light)']
+    ['dracula', 'Dracula'], ['alucard', 'Alucard (Dracula Light)'],
+    ['olive', 'Olive Garden Feast'], ['olive-dark', 'Olive Garden Feast Dark']
   ];
   var KEY = 'tts-theme';
   function stored() { try { return localStorage.getItem(KEY); } catch (e) { return null; } }
