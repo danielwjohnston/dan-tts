@@ -62,3 +62,10 @@ docker run --rm -p 8000:8000 dan-tts
 
 - Edge TTS uses Microsoft online voices; subject to Microsoft availability/changes.
 - Large inputs: chunk on the client if needed; this simple service streams a single request.
+
+## GitHub Pages
+
+The static front end (`demo.html`, `tester.html`, `static/`, `samples/`) is deployed to GitHub Pages by
+`.github/workflows/pages.yml` on every push to `main`. Enable it once under **Settings → Pages → Source: GitHub Actions**.
+The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is static-only, so synthesis in
+`tester.html` still needs the FastAPI server running somewhere — set the "API Base URL" field to it.
