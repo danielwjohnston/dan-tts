@@ -1,8 +1,0 @@
-[build]
-  publish = "."
-  command = ""
-
-[[redirects]]
-  from = "/"
-  to = "/demo.html"
-  status = 302
