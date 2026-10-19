@@ -280,12 +280,7 @@ async def _assert_public_host(url: str) -> None:
             raise HTTPException(status_code=400, detail="URL host is not allowed")
 
 
-@app.post("/extract_text")
-async def extract_text(payload: ExtractTextRequest):
-    url = payload.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
-
+async def _fetch_html(url: str) -> str:
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             # Follow redirects manually so every hop passes the SSRF check
@@ -300,14 +295,37 @@ async def extract_text(payload: ExtractTextRequest):
                     body = await resp.content.read(MAX_FETCH_BYTES + 1)
                     if len(body) > MAX_FETCH_BYTES:
                         raise HTTPException(status_code=413, detail="Page is too large")
-                    html = body.decode(resp.get_encoding() if resp.charset else "utf-8", errors="replace")
-                    break
-            else:
-                raise HTTPException(status_code=502, detail="Too many redirects")
+                    return body.decode(resp.get_encoding() if resp.charset else "utf-8", errors="replace")
+            raise HTTPException(status_code=502, detail="Too many redirects")
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {exc}")
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="URL fetch timed out")
+
+
+@app.post("/extract_text")
+async def extract_text(payload: ExtractTextRequest):
+    url = payload.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    if url.startswith(("http://", "https://")):
+        candidates = [url]
+    elif "://" in url:
+        raise HTTPException(status_code=400, detail="Only http:// and https:// URLs are supported")
+    else:
+        # Bare domain like "digg.com": try HTTPS first, then fall back to HTTP
+        bare = url.lstrip("/")
+        candidates = [f"https://{bare}", f"http://{bare}"]
+
+    error: Optional[HTTPException] = None
+    for candidate in candidates:
+        try:
+            html = await _fetch_html(candidate)
+            break
+        except HTTPException as exc:
+            error = exc
+    else:
+        raise error
 
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "nav", "header", "footer", "noscript", "svg", "img"]):
