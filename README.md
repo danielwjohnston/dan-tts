@@ -69,3 +69,13 @@ The static front end (`demo.html`, `tester.html`, `static/`, `samples/`) is depl
 `.github/workflows/pages.yml` on every push to `main`. Enable it once under **Settings → Pages → Source: GitHub Actions**.
 The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is static-only, so synthesis in
 `tester.html` still needs the FastAPI server running somewhere — set the "API Base URL" field to it.
+
+## Free backend hosting (Render)
+
+`render.yaml` deploys the API on Render's free plan using the Dockerfile:
+
+1. Sign in at https://render.com with GitHub (no card needed for the free plan).
+2. **New → Blueprint**, pick this repo, and click **Apply**.
+3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
+
+Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
