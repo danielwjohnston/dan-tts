@@ -8,6 +8,7 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 - **17 Edge TTS voices** (en-US, no API key required)
 - **Formats**: mp3 (direct), m4a, ogg, flac (via ffmpeg)
 - **Word-level highlighting** — real-time word tracking during playback
+- **Paragraph chunking** — long text is split into paragraphs and generated in sequence with a progress bar; highlighting stays in sync across the whole text
 - **Auto-scroll pause** — scroll freely during playback without rubber-banding
 - **URL text extraction** — paste a URL, load page text for read-aloud
 - **Export** — JSON bundle (audio + timing), WebVTT and SRT captions, standalone player embed code
@@ -85,6 +86,7 @@ Free services sleep after ~15 minutes idle; the first request afterwards takes ~
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q
+node --test tests/chunk-text.test.js   # text chunker
 ```
 
-Edge TTS and outbound HTTP are stubbed, so the suite runs offline. CI runs it on every PR.
+Edge TTS and outbound HTTP are stubbed, so the suites run offline. CI runs it on every PR.

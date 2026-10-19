@@ -6,6 +6,7 @@
   <title>Dan's TTS Tester</title>
   <link rel="stylesheet" href="static/themes.css" />
   <script src="static/theme.js"></script>
+  <script src="static/chunk-text.js"></script>
   <style>
     :root {
       --bg: #ffffff; --bg2: #f7f7f8; --fg: #111; --fg2: #555; --border: #e2e2e2;
@@ -74,6 +75,8 @@
     .loading-bar { height: 3px; background: var(--bg2); border-radius: 2px; margin-top: 6px; overflow: hidden; display: none; }
     .loading-bar.active { display: block; }
     .loading-bar .bar { height: 100%; width: 30%; background: var(--primary); border-radius: 2px; animation: slide 1.2s ease-in-out infinite; }
+    .loading-bar.determinate .bar { animation: none; transition: width .3s ease; }
+    .highlight-box .para-break { display: block; height: .8em; }
     @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
 
     /* Advanced toggle */
@@ -406,6 +409,7 @@
       highlightBox.innerHTML = '';
       highlightBox.style.display = 'block';
       wordSpans = boundaries.map((b, i) => {
+        if (b.paraStart && i > 0) highlightBox.appendChild(Object.assign(document.createElement('span'), { className: 'para-break' }));
         const span = document.createElement('span');
         span.className = 'word';
         span.textContent = b.text;
@@ -479,6 +483,43 @@
       btn.disabled = on;
       btn.textContent = on ? 'Generating...' : 'Synthesize';
       loadingBar.classList.toggle('active', on);
+      if (!on) setProgress(null);
+    }
+
+    /* Determinate progress (fraction 0..1), or null for the indeterminate slider */
+    function setProgress(fraction) {
+      const bar = loadingBar.querySelector('.bar');
+      loadingBar.classList.toggle('determinate', fraction !== null);
+      bar.style.width = fraction === null ? '' : `${Math.max(3, fraction * 100)}%`;
+    }
+
+    function audioDuration(blob) {
+      return new Promise((resolve, reject) => {
+        const a = new Audio();
+        a.preload = 'metadata';
+        a.onloadedmetadata = () => { URL.revokeObjectURL(a.src); resolve(a.duration); };
+        a.onerror = () => { URL.revokeObjectURL(a.src); reject(new Error('Could not read audio duration')); };
+        a.src = URL.createObjectURL(blob);
+      });
+    }
+
+    /* ---- Paragraph chunking: synthesize long text piece by piece ---- */
+    async function synthesizeChunked(chunks, voice) {
+      const parts = [];
+      const boundaries = [];
+      let offsetTicks = 0;
+      for (let i = 0; i < chunks.length; i++) {
+        logEl.textContent = `Generating paragraph ${i + 1} of ${chunks.length}...`;
+        setProgress(i / chunks.length);
+        // MP3 frames concatenate cleanly; other containers don't, so chunks are always MP3
+        const data = await doSynthesizeWithTiming(chunks[i], voice, 'mp3');
+        const blob = b64toBlob(data.audio, data.contentType);
+        (data.boundaries || []).forEach((b, j) => boundaries.push({ ...b, offset: b.offset + offsetTicks, paraStart: j === 0 }));
+        offsetTicks += Math.round((await audioDuration(blob)) * 10000000);
+        parts.push(blob);
+      }
+      setProgress(1);
+      return { blob: new Blob(parts, { type: 'audio/mpeg' }), boundaries };
     }
 
     function smartFilename(text, voice, ext) {
@@ -500,20 +541,30 @@
       if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const voice = voiceSelect.value || 'en-US-AriaNeural';
       const format = document.getElementById('format').value;
+      const chunks = chunkText(text);
       setLoading(true);
       logEl.textContent = 'Requesting...';
       try {
-        const data = await doSynthesizeWithTiming(text, voice, format);
-        const blob = b64toBlob(data.audio, data.contentType);
-        lastBlob = blob; lastExt = format; lastText = text; lastVoice = voice;
+        let blob, boundaries, outFormat = format;
+        if (chunks.length > 1) {
+          ({ blob, boundaries } = await synthesizeChunked(chunks, voice));
+          outFormat = 'mp3';
+        } else {
+          const data = await doSynthesizeWithTiming(text, voice, format);
+          blob = b64toBlob(data.audio, data.contentType);
+          boundaries = data.boundaries || [];
+        }
+        lastBlob = blob; lastExt = outFormat; lastText = text; lastVoice = voice;
         downloadBtn.disabled = false;
         playerEl.src = URL.createObjectURL(blob);
         playerEl.style.display = '';
-        renderHighlight(data.boundaries || []);
+        renderHighlight(boundaries);
         await playerEl.play();
         playerEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        logEl.textContent = `Done (${format}, ${(blob.size / 1024).toFixed(1)} KB, ${(data.boundaries || []).length} words).`;
-        addHistory(text, voice, format, blob);
+        const parts = chunks.length > 1 ? `, ${chunks.length} paragraphs` : '';
+        const note = outFormat !== format ? ` Long text is generated as MP3.` : '';
+        logEl.textContent = `Done (${outFormat}, ${(blob.size / 1024).toFixed(1)} KB, ${boundaries.length} words${parts}).${note}`;
+        addHistory(text, voice, outFormat, blob);
       } catch (err) {
         console.error(err);
         logEl.textContent = 'Error: ' + err.message;
