@@ -1,0 +1,8 @@
+{
+  "name": "dan-tts-engine",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Direct Microsoft Edge TTS client (audio + word timings) with no server",
+  "scripts": { "test": "node --test test/*.test.js" }
+}
