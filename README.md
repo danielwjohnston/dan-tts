@@ -74,6 +74,13 @@ The static front end (`demo.html`, `tester.html`, `static/`, `samples/`) is depl
 The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is static-only, so synthesis in
 `tester.html` still needs the FastAPI server running somewhere — set the "API Base URL" field to it.
 
+## Cloudflare Workers
+
+`wrangler.jsonc` deploys the same static front end to Cloudflare Workers (static assets only). Its custom
+build step assembles `_site/` from `demo.html`, `tester.html`, `static/` and `samples/`, so the Cloudflare
+build needs no build command, just the deploy command `npx wrangler deploy`. Cloudflare Workers can't run the
+FastAPI server (it shells out to ffmpeg), so point the tester's API Base URL at the Render backend below.
+
 ## Free backend hosting (Render)
 
 `render.yaml` deploys the API on Render's free plan using the Dockerfile:

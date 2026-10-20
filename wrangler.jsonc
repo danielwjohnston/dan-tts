@@ -1,0 +1,13 @@
+// Cloudflare Workers deploy for the static front end (same files as GitHub Pages).
+// The FastAPI server needs ffmpeg and can't run on Workers; host it on Render (see README).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dan-tts",
+  "compatibility_date": "2026-10-01",
+  "build": {
+    "command": "rm -rf _site && mkdir _site && cp -r demo.html tester.html static samples _site/ && cp demo.html _site/index.html"
+  },
+  "assets": {
+    "directory": "./_site"
+  }
+}
