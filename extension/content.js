@@ -337,8 +337,9 @@
 
   // ---- Messages from the player (via the background worker) ----
   chrome.runtime.onMessage.addListener((msg) => {
-    // Book chapter pages hear every runtime message, so take only those addressed to this tab
-    if (window.__danTtsTabId !== undefined && msg.tabId !== window.__danTtsTabId) return;
+    // Book chapter pages hear every runtime message, so they take only those tagged with their
+    // tab id. Other extension pages (the PDF reader) hear them too, and ignore any tagged one.
+    if (msg.tabId !== window.__danTtsTabId) return;
     if (msg.event === 'start') { start(msg.mode); return; }
     if (!mode) return;
     if (msg.event === 'chunk') {
