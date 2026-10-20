@@ -62,6 +62,7 @@
         <select class="speed" title="Speed"></select>
         <select class="voice" title="Voice"><option>${settings.voice}</option></select>
         <span class="status"></span>
+        <button class="restart" title="Start from the beginning">⟲</button>
         <button class="close" title="Close (Esc)">✕</button>
       </div>
     </div>`;
@@ -206,6 +207,21 @@
   overlay.addEventListener('touchmove', () => { userScrolledAt = Date.now(); }, { passive: true });
   addEventListener('wheel', () => { if (mode === 'selection') userScrolledAt = Date.now(); }, { passive: true });
 
+  // ---- Progress (resume + library), page mode only ----
+  const pageUrl = location.origin + location.pathname + location.search;
+  const progressKey = 'progress:' + pageUrl;
+  let fingerprint = '';
+  let lastSave = 0;
+  let resumedNote = false;
+  let lastPos = null; // latest { chunk, ticks, wordsDone }, saved for real every ~2 s and on close
+  const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+
+  function saveProgress(fields) {
+    if (mode !== 'page') return;
+    const title = tokens.length ? article.querySelector('h1')?.textContent || document.title : document.title;
+    chrome.storage.local.set({ [progressKey]: { url: pageUrl, title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
+  }
+
   // ---- Start / controls ----
   async function start(requested) {
     await ready;
@@ -226,11 +242,26 @@
     bar.classList.remove('hidden');
     setStatus('Loading…');
     if (!chunks.length) { setStatus('Nothing to read', true); return; }
-    toPlayer('load', { chunks, voice: settings.voice, rate: settings.rate });
+    // Resume where this page was left off, if its text hasn't changed
+    let startChunk = 0, startTicks = 0;
+    resumedNote = false;
+    if (mode === 'page') {
+      fingerprint = `${chunks.length}:${hash(chunks.slice(0, 3).join('|').slice(0, 4000))}`;
+      const saved = (await chrome.storage.local.get(progressKey))[progressKey];
+      if (saved && saved.fp === fingerprint && !saved.done && (saved.chunk > 0 || saved.ticks > 2e7) && saved.chunk < chunks.length) {
+        startChunk = saved.chunk;
+        startTicks = Math.max(0, saved.ticks - 1e7); // back up a second for context
+        resumedNote = true;
+      }
+      saveProgress({ chunk: startChunk, ticks: startTicks, wordsDone: chunkStart[startChunk] || 0, done: false });
+    }
+    toPlayer('load', { chunks, voice: settings.voice, rate: settings.rate, startChunk, startTicks });
     loadVoices().catch(() => {});
   }
 
   function stop(hide = true) {
+    if (mode === 'page' && lastPos && state !== 'idle') saveProgress(lastPos); // exact spot on close
+    lastPos = null;
     if (mode) toPlayer('stop');
     clearHighlight();
     state = 'idle';
@@ -264,6 +295,7 @@
   $('.prev').addEventListener('click', () => toPlayer('seek', { chunk: Math.max(0, currentChunk - 1), ticks: 0 }));
   $('.next').addEventListener('click', () => { if (currentChunk + 1 < chunks.length) toPlayer('seek', { chunk: currentChunk + 1, ticks: 0 }); });
   $('.close').addEventListener('click', () => stop());
+  $('.restart').addEventListener('click', () => { resumedNote = false; toPlayer('seek', { chunk: 0, ticks: 0 }); });
   speedSel.addEventListener('change', () => {
     settings.rate = Number(speedSel.value);
     chrome.storage.sync.set({ rate: settings.rate });
@@ -303,13 +335,20 @@
       const a = alignments[msg.chunk];
       const j = a && msg.word >= 0 ? a.map[msg.word] : -1;
       if (j >= 0) highlight(j);
+      if (a && msg.word >= 0) {
+        lastPos = { chunk: msg.chunk, ticks: a.boundaries[msg.word].offset, wordsDone: j >= 0 ? j : chunkStart[msg.chunk], done: false };
+        if (Date.now() - lastSave > 2000) { lastSave = Date.now(); saveProgress(lastPos); }
+      }
     } else if (msg.event === 'state') {
       if (msg.state === 'loading' && msg.chunk !== currentChunk) clearHighlight(); // don't leave the old word lit
       state = msg.state;
       currentChunk = msg.chunk;
       playBtn.textContent = state === 'playing' ? '❚❚' : '▶';
-      setStatus(state === 'loading' ? 'Loading…' : `${msg.chunk + 1} / ${msg.total}`);
+      setStatus(state === 'loading' ? 'Loading…' : `${resumedNote && state === 'playing' ? 'Resumed · ' : ''}${msg.chunk + 1} / ${msg.total}`);
+      if (state === 'playing' && resumedNote) setTimeout(() => { resumedNote = false; }, 4000);
     } else if (msg.event === 'ended') {
+      lastPos = null;
+      saveProgress({ chunk: 0, ticks: 0, wordsDone: tokens.length, done: true });
       state = 'idle';
       playBtn.textContent = '▶';
       setStatus('Done');
