@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dan-tts PDF Reader</title>
+  <link rel="stylesheet" href="content.css">
+  <style>
+    :root { --bg: #fbfaf7; --fg: #1d1d1f; --muted: #6b6b70; --card: #fff; --border: #e3e1dc; --accent: #4f46e5; color-scheme: light dark; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #17171a; --fg: #ececf0; --muted: #9a9aa3; --card: #222227; --border: #34343b; --accent: #818cf8; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 48px 16px; }
+    h1 { font-size: 26px; margin: 0 0 6px; }
+    p { color: var(--muted); margin: 0 0 20px; line-height: 1.5; }
+    .drop { border: 2px dashed var(--border); border-radius: 12px; background: var(--card); padding: 40px 16px; text-align: center; cursor: pointer; }
+    .drop.over { border-color: var(--accent); }
+    .drop strong { display: block; font-size: 17px; margin-bottom: 6px; color: var(--fg); }
+    button { font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; margin-top: 12px; }
+    #status { margin-top: 18px; color: var(--muted); min-height: 1.4em; }
+    #status.error { color: #e5484d; }
+    #progress { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin-top: 10px; display: none; }
+    #progress div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Read a PDF</h1>
+    <p>Open a PDF from your computer, or press <strong>Alt+Shift+R</strong> while viewing a PDF online. Works with PDFs that contain text; scanned pages (images) aren't supported yet.</p>
+    <div class="drop" id="drop" tabindex="0">
+      <strong>Drop a PDF here</strong>
+      or <button id="pick" type="button">Choose a file…</button>
+      <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+    </div>
+    <div id="progress"><div></div></div>
+    <div id="status" role="status"></div>
+    <div id="allow" hidden><button id="allow-btn" type="button">Allow reading PDFs from this site</button></div>
+  </main>
+  <script src="lib/chunk-text.js"></script>
+  <script src="lib/align.js"></script>
+  <script src="lib/pdf-text.js"></script>
+  <script type="module" src="pdf-reader.js"></script>
+</body>
+</html>

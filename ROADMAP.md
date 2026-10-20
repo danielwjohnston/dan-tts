@@ -19,6 +19,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 
 ## Longer-Term / Experimental
 
+- ~~**PDF reading**~~ — Done in the extension for PDFs with a text layer (headers, footers and page numbers stripped, hyphenation rejoined). Next: text recognition for scanned/image-only PDFs
 - **Video generation** — Use ffmpeg to create MP4 videos with synchronized text highlighting (multiple styles: typewriter, split-screen, animated slides)
 - ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API)
 - **CMS integrations** — WordPress shortcode, Ghost embed, static site generator plugins
