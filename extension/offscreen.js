@@ -1,8 +1,10 @@
-// Offscreen player: synthesizes chunks with the engine and plays them, reporting
-// progress to the tab. Lives outside the page so site CSP can't block audio.
+// Player: synthesizes chunks with the engine and plays them, reporting progress to the
+// tab. In Chrome it runs in an offscreen document (outside the page, so site CSP can't
+// block audio). Firefox has no offscreen documents, so there the background page imports
+// this module and drives it directly (handleCommand / setEventSink).
 import { synthesize } from './engine/tts.js';
 
-const audio = document.getElementById('audio');
+const audio = document.getElementById('audio') || new Audio();
 const openSocket = (url) => new WebSocket(url);
 
 let session = 0;       // bumps on every load/stop so stale async work is ignored
@@ -16,7 +18,10 @@ let boundaries = [];
 let lastWord = -1;
 let ticker = null;
 
-const toTab = (event, data = {}) => chrome.runtime.sendMessage({ target: 'tab', event, ...data }).catch(() => {});
+let emit = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
+const toTab = (event, data = {}) => emit({ target: 'tab', event, ...data });
+/** Where player events go (default: runtime messages, relayed to the tab by the background). */
+export function setEventSink(fn) { emit = fn; }
 
 function synth(i) {
   if (!cache.has(i)) {
@@ -114,9 +119,14 @@ const commands = {
   stop() { session++; stopTicker(); audio.pause(); audio.removeAttribute('src'); clearCache(); current = -1; chunks = []; },
 };
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.target !== 'offscreen') return false;
-  commands[msg.cmd]?.(msg);
-  sendResponse({ ok: true });
-  return false;
-});
+export function handleCommand(msg) { commands[msg.cmd]?.(msg); }
+
+// As an offscreen document, take commands from runtime messages
+if (location.pathname.endsWith('/offscreen.html')) {
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.target !== 'offscreen') return false;
+    handleCommand(msg);
+    sendResponse({ ok: true });
+    return false;
+  });
+}
