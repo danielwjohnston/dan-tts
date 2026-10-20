@@ -10,6 +10,11 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
 - **Cleaner "Load from URL"** — `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. Use Readability-style extraction like the extension does
 - **"Load from URL" on the Cloudflare Worker** — the Worker's `/extract_text` returns 501, so the button only works against the Render/FastAPI backend
+- **Test speech on the deployed Worker** — `/health` and `/voices` work at `dan-tts.macdaddydwj.workers.dev`, but `/synthesize` hasn't been tried there yet. Microsoft's voice service may treat Cloudflare's servers differently (see `worker/README.md`). Run one synthesis from the tester
+- **Make the Worker the tester's default API** — `tester.html` still defaults to `https://dan-tts.onrender.com`, which sleeps when idle. Once the speech test passes, default to the Worker; when the tester is served by the Worker itself, use its own address
+- **One Cloudflare deploy path** — the dashboard's Git builds already deploy every push to `main`, and `.github/workflows/deploy-worker.yml` would deploy again if its secrets were added. Decide which to keep (Git builds are simpler) and remove the other
+- **Update `worker/README.md`** — its setup steps (API token, GitHub secrets, Actions) predate the Git-connected deploy and the combined site + API Worker in the root `wrangler.jsonc`
+- **Skip the Python install in Cloudflare builds** — each build runs `pip install -r requirements.txt` (about 10s) because `requirements.txt` is at the repo root; the Worker doesn't use it. Turn it off with a build variable in the dashboard (check Cloudflare's docs for the current name)
 - **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
 
 ## Medium-Term
@@ -32,7 +37,9 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Book audio** — cache generated audio + word timings per chapter for offline replay; export a book as an audiobook (one MP3 + SRT per chapter); optional separate voice for dialogue
 - **Books on the website** — "Load from URL" on a book returns its chapter list, and Batch exports one MP3 per chapter
 - **Video generation** — Use ffmpeg to create MP4 videos with synchronized text highlighting (multiple styles: typewriter, split-screen, animated slides)
-- ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API)
+- ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API), and Cloudflare Workers (front end + API in one Worker, `wrangler.jsonc`)
+- **Other formats on the Worker** — the Worker returns MP3 only; M4A/OGG/FLAC need ffmpeg, which only the Render backend has. Options: ffmpeg compiled to WebAssembly, or send those requests to Render
+- **Decide: GitHub Pages or Cloudflare for the front end** — both now host the same site. Keeping both costs nothing; Cloudflare alone means one address for site and API
 - **CMS integrations** — WordPress shortcode, Ghost embed, static site generator plugins
 - **Multi-language support** — Expand beyond en-US voices
 - **Custom voice profiles** — Save per-project voice + speed + format preferences
