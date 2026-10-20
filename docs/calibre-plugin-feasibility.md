@@ -25,15 +25,37 @@ over HTTP, which needs no third-party Python packages at all.
     This is the right type for "Read aloud" / "Make audiobook".
   - **FileTypePlugin / Conversion**: not needed; we do not have to convert formats.
   - **Metadata / Store / Catalog**: not relevant.
-- Calibre's GUI is Qt. Recent Calibre releases use Qt6 (PyQt6), older ones Qt5. Since
-  calibre 5.13, plugins can use `from qt.core import ...` for Qt classes, which works on
-  both Qt5 and Qt6 builds, so one plugin can cover both. The plugin should still avoid Qt
-  where it can, since the built-in job and dialog helpers cover most needs.
+- Calibre's GUI is Qt. The calibre release notes mention Qt 6.10 (release 9.2.1), so
+  current releases run on Qt 6. Plugins should import Qt through `from qt.core import ...`,
+  which the manual's examples use; that route has worked across Qt5 and Qt6 builds since
+  calibre 5.13. The plugin should still avoid Qt where it can, since the built-in job and
+  dialog helpers cover most needs.
 - Multi-file plugins need an empty `plugin-import-name-<name>.txt` marker in the zip, and
   extra modules are imported via `calibre_plugins.<name>`. The GUI class (`InterfaceAction`)
   should live in its own module, separate from `__init__.py`, because calibre also runs a
   CLI that must not load GUI code. Source: calibre manual, "Writing your own plugins"
   (https://manual.calibre-ebook.com/creating_plugins.html).
+- `__init__.py` boilerplate (from the manual's Interface Plugin Demo, fetched directly):
+
+  ```python
+  from calibre.customize import InterfaceActionBase
+
+  class InterfacePluginDemo(InterfaceActionBase):
+      name = 'Interface Plugin Demo'
+      description = 'An advanced plugin demo'
+      supported_platforms = ['windows', 'osx', 'linux']
+      author = 'Kovid Goyal'
+      version = (1, 0, 0)
+      minimum_calibre_version = (0, 7, 53)
+      actual_plugin = 'calibre_plugins.interface_demo.ui:InterfacePlugin'
+  ```
+
+- `ui.py` holds the `InterfaceAction` subclass with `action_spec` and `genesis()`, which
+  sets the toolbar icon and connects `self.qaction.triggered` to the handler. The manual
+  notes that calibre has no central shortcut management, so pick an unused shortcut or
+  `None`.
+- Docs version: the manual page fetched is for calibre 9.16.0, so the study targets the
+  current release line rather than 8.x.
 - Long work runs as a background job through Calibre's job system (`ThreadedJob` /
   `BaseJob`), so the GUI stays responsive and progress shows in Calibre's job manager.
   Synthesis of a whole book is minutes long, so this is required, not optional.
@@ -154,12 +176,10 @@ Option B adds roughly one more week for packaging and per-platform testing.
 
 ## Items not verified in this study
 
-- Exact Calibre version that ships Qt6 and the exact Python minor version. Web search
-  indicated PyQt6 in calibre 8.x builds, but did not confirm the upstream Python version;
-  check the calibre release notes for the version you target.
-- The plugin manifest/`__init__.py` contents: the manual's tutorial was not retrieved in
-  full here, so the exact boilerplate still needs to be copied from the demo plugin.
-- Whether `db.add_format` accepts `MP3` and `SRT` without side effects on the viewer in
-  the target version. Needs a quick test in a real library.
+- The Python version calibre's embedded interpreter runs. Neither the manual's plugin
+  page nor the release notes (first 100k characters) state it, and the rest of the release
+  notes page was checked for "Python" with no matches. Confirm from the calibre source or
+  by running `calibre-debug -c "import sys; print(sys.version)"` on a real install.
+- Whether `db.add_format` accepts MP3 and SRT without side effects. Needs a real library.
 - Current Edge endpoint behaviour; the study relies on the repo's existing engine tests,
   not a live check.
