@@ -1,0 +1,1 @@
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https://speech.platform.bing.com wss://speech.platform.bing.com https://cdn.jsdelivr.net blob: data:

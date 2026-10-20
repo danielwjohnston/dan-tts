@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https://speech.platform.bing.com wss://speech.platform.bing.com https://cdn.jsdelivr.net blob: data:">
+  <title>dan-tts Reader</title>
+  <link rel="stylesheet" href="desktop.css">
+  <script src="chrome-shim.js"></script>
+</head>
+<body>
+  <main>
+    <h1>dan-tts Reader</h1>
+    <p class="sub">Listen to web pages, PDFs (including scans) and any text, with natural voices and word-by-word highlighting.</p>
+
+    <div class="actions">
+      <form class="card" id="url-form">
+        <strong>Web page or PDF link</strong>
+        <p>Paste an address; articles are cleaned up for reading.</p>
+        <div class="row"><input type="url" id="url" placeholder="https://…" required aria-label="Web address"><button type="submit">Read</button></div>
+      </form>
+      <div class="card drop" id="drop">
+        <strong>A file on your computer</strong>
+        <p>PDF, text, Markdown or HTML. You can also drop a file here.</p>
+        <button type="button" id="pick">Choose a file…</button>
+        <input type="file" id="file" accept=".pdf,.txt,.md,.markdown,.html,.htm,application/pdf,text/plain,text/html,text/markdown" hidden>
+      </div>
+    </div>
+
+    <h2>Paste text</h2>
+    <form class="card" id="text-form">
+      <textarea id="text" placeholder="Paste or type anything to read aloud…" aria-label="Text to read"></textarea>
+      <div class="row" style="margin-top:8px"><button type="submit">Read</button></div>
+    </form>
+    <div class="status" id="status" role="status"></div>
+
+    <h2>Library</h2>
+    <ul class="library" id="library"></ul>
+    <p class="empty" id="empty" hidden>Nothing yet. Everything you read shows up here and keeps its place.</p>
+  </main>
+  <script type="module" src="home.js"></script>
+</body>
+</html>
