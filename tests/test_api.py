@@ -153,3 +153,24 @@ def test_extract_js_only_page_returns_422(client, monkeypatch):
 
     monkeypatch.setattr(main, "_fetch_html", fake_fetch)
     assert client.post("/extract_text", json={"url": "spa.example"}).status_code == 422
+
+
+def test_extract_skips_sidebar_and_header_without_main(client, monkeypatch):
+    page = (
+        "<html><body>"
+        "<div class='site-header'><p>Wikisource Log in Donate</p></div>"
+        "<div class='sidebar-menu'><p>Navigation links for the sidebar here</p></div>"
+        "<div id='content'><p>" + "The story begins on a dark and stormy night. " * 4 + "</p>"
+        "<p>It continues the next morning in the same town.</p></div>"
+        "</body></html>"
+    )
+
+    async def fake_fetch(url):
+        return page
+
+    monkeypatch.setattr(main, "_fetch_html", fake_fetch)
+    text = client.post("/extract_text", json={"url": "book.example"}).json()["text"]
+    assert "dark and stormy night" in text
+    assert "next morning" in text
+    assert "Log in" not in text
+    assert "sidebar links" not in text
