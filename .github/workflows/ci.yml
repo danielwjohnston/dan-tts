@@ -25,3 +25,4 @@ jobs:
         working-directory: engine
       - run: node --test extension/test/align.test.js extension/test/pdf-text.test.js
       - run: node scripts/sync-extension.mjs --check
+      - run: node --check worker/src/index.js

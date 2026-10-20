@@ -1,0 +1,5 @@
+# dan-tts API on Cloudflare Workers (free plan): same endpoints as the Python server,
+# minus /extract_text and non-MP3 formats. See worker/README.md to deploy.
+name = "dan-tts"
+main = "src/index.js"
+compatibility_date = "2026-09-01"

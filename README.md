@@ -74,7 +74,11 @@ The static front end (`demo.html`, `tester.html`, `static/`, `samples/`) is depl
 The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is static-only, so synthesis in
 `tester.html` still needs the FastAPI server running somewhere — set the "API Base URL" field to it.
 
-## Free backend hosting (Render)
+## Free backend hosting
+
+Two free options: **Cloudflare Workers** (never sleeps; see [`worker/`](worker/) for a 10-minute browser-only setup) or **Render** (below).
+
+### Render
 
 `render.yaml` deploys the API on Render's free plan using the Dockerfile:
 
