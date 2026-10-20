@@ -193,12 +193,22 @@ Option B adds roughly one more week for packaging and per-platform testing.
 
 ## Items not verified in this study
 
-- Edge endpoint: the voices-list URL returned HTTP 200 from the session on 2026-10-20 with the
-  token pinned in `engine/src/drm.js`. That confirms reachability and the token, not the
-  audio path (WebSocket synthesis was not exercised live), and not the terms of service.
-- Runtime behaviour of `db.add_format` with MP3 and SRT in a real library (viewer, search,
-  and metadata effects). The source below is verified; running it is not.
-- Build-time Python version. `bypy/macos/__main__.py` imports `python_major_minor_version` from
-  `bypy.constants` and derives `py_ver` from it, so the bundled version is computed at build
-  time, not hardcoded. The function body was not fetched: `bypy/constants.py` returned 404 on
-  master. The declared minimum (`>=3.14`) is the version this study uses.
+- Edge terms of service. This is a user decision before any public release. The audio path
+  itself is covered by the repo's earlier live checks (see `engine/README.md`) and the
+  voices endpoint returned HTTP 200 from the session on 2026-10-20.
+- Viewer, search and metadata effects of an attached MP3/SRT format. Format attach itself is
+  tested below; the GUI viewer was not run (headless).
+
+## Runtime checks (Calibre 9.16.0 installed in the sandbox, 2026-10-20)
+
+- Installed with the official `linux-installer.sh` to `/opt/calibre` (needed `libegl1` and
+  `libopengl0` from apt).
+- Bundled interpreter: `calibre-debug -c "import sys; print(sys.version)"` prints
+  **Python 3.14.8**. This confirms the declared `requires-python = ">=3.14"` at runtime.
+- `calibredb add_format` in a throwaway library:
+  - Attaching `.mp3` and `.srt` to a book with `.txt` succeeds; all three formats are listed.
+  - A second `.mp3` with default options **replaces** the existing file in place.
+  - With `--dont-replace` it prints "A MP3 file already exists for book ..., not replacing" and
+    leaves the file unchanged.
+  - Format files are written into the book's folder under the library, as the backend source
+    describes.
