@@ -196,8 +196,8 @@ Option B adds roughly one more week for packaging and per-platform testing.
 - Edge terms of service. This is a user decision before any public release. The audio path
   itself is covered by the repo's earlier live checks (see `engine/README.md`) and the
   voices endpoint returned HTTP 200 from the session on 2026-10-20.
-- Viewer, search and metadata effects of an attached MP3/SRT format. Format attach itself is
-  tested below; the GUI viewer was not run (headless).
+- GUI viewer behaviour with an attached MP3/SRT. Headless tests covered search, metadata and
+  export (below); the GUI itself was not run.
 
 ## Runtime checks (Calibre 9.16.0 installed in the sandbox, 2026-10-20)
 
@@ -212,3 +212,9 @@ Option B adds roughly one more week for packaging and per-platform testing.
     leaves the file unchanged.
   - Format files are written into the book's folder under the library, as the backend source
     describes.
+  - `calibredb search 'formats:"=MP3"'` and `'formats:"=SRT"'` both match the book.
+  - `calibredb export --single-dir` writes `.mp3`, `.srt`, `.txt` and `.opf` side by side.
+  - `ebook-convert` on the book's `.txt` still produces an EPUB, so attaching audio does not
+    break conversion.
+  - Full-text search for a word from the book returned nothing. The library's full-text index
+    was not built in this test, so this does not show a problem with the attached formats.
