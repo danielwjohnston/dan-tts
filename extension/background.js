@@ -30,8 +30,12 @@ async function installHeaderRule() {
 
 chrome.runtime.onInstalled.addListener(() => {
   installHeaderRule();
-  chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
-  chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
+  // removeAll first: on updates the old items may still exist, and duplicate ids throw
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
+    chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'open-library', title: 'Open library', contexts: ['action'] });
+  });
 });
 chrome.runtime.onStartup.addListener(installHeaderRule);
 
@@ -70,6 +74,7 @@ export async function startReading(tabId, mode = 'auto') {
 chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto'));
 chrome.commands.onCommand.addListener((command, tab) => { if (command === 'read' && tab) startReading(tab.id, 'auto'); });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'open-library') { chrome.tabs.create({ url: chrome.runtime.getURL('library.html') }); return; }
   if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page');
 });
 chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });

@@ -96,6 +96,32 @@ try {
   await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelectorAll('.voice option').length > 100, null, { timeout: 20000 });
   check('voice picker lists all voices', true, `${await shadow(`return root.querySelectorAll('.voice option').length;`)} voices`);
 
+  // 6b. Resume: reopen the page → continues near where we were, not from the top
+  await page.waitForTimeout(2600); // progress is saved every ~2 s
+  const before = (await activeWord())?.[0] ?? 0;
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await read('page');
+  await page.waitForFunction((t) => { const el = document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'); return el && Number(el.dataset.i) >= t - 25; }, before, { timeout: 30000 });
+  const resumedStatus = await status();
+  check('reopening resumes where you left off', /Resumed/.test(resumedStatus), `was at token ${before}, status "${resumedStatus}", now ${(await activeWord())?.join(' ')}`);
+  await shadow(`root.querySelector('.restart').click();`);
+  await page.waitForFunction(() => { const el = document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'); return el && Number(el.dataset.i) < 10; }, null, { timeout: 30000 });
+  check('⟲ starts over from the beginning', true, (await activeWord())?.join(' '));
+
+  // 6c. Library lists the page with its progress
+  const extId = new URL(sw.url()).host;
+  const lib = await ctx.newPage();
+  await lib.goto(`chrome-extension://${extId}/library.html`);
+  await lib.waitForSelector('#list li', { timeout: 5000 });
+  const libText = await lib.textContent('#list');
+  check('library lists the page with progress', libText.includes('The Quiet Library') && /127\.0\.0\.1 · \d+% · paragraph 1 of 1/.test(libText), libText.replace(/\s+/g, ' ').trim().slice(0, 120));
+  await lib.click('#list li .remove');
+  await lib.waitForSelector('#empty:not([hidden])', { timeout: 5000 });
+  check('library item can be removed', true);
+  await lib.close();
+  await page.bringToFront();
+
   // 7. Close, then read a selection in place
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);

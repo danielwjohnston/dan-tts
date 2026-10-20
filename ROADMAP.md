@@ -15,6 +15,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Browser extension**~~ — Done: `extension/` reads pages and selections with no server (Chromium browsers; Firefox next)
 - **Voice comparison** — Synthesize same text with multiple voices side-by-side for easy A/B testing
 - **Persistent history** — Save synthesis history to localStorage or a lightweight database instead of session-only
+  - Extension side done: the library remembers every page read, with resume position
 
 ## Longer-Term / Experimental
 
