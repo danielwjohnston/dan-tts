@@ -161,8 +161,25 @@ try {
   pdfs['book.pdf'] = await maker.pdf({ format: 'Letter', displayHeaderFooter: true, margin: { top: '1in', bottom: '1in' },
     headerTemplate: '<div style="font-size:9px;width:100%;text-align:center">The Quiet Library — A Novel</div>',
     footerTemplate: '<div style="font-size:9px;width:100%;text-align:center"><span class="pageNumber"></span></div>' });
+  // A "scan": each page is only a picture of text (with a running header and page number)
+  const scanPage = (n, body) => `<div style="width:816px;height:1056px;padding:72px;box-sizing:border-box;font:16pt Georgia;background:#fff;position:relative">
+    <div style="text-align:center;font-size:11pt">THE QUIET LIBRARY</div><p style="margin-top:40px;line-height:1.5">${body}</p>
+    <div style="position:absolute;bottom:48px;width:672px;text-align:center;font-size:11pt">${n}</div></div>`;
+  const scanBodies = [
+    'Every town has a place where time slows down. In ours, it was the library on Elm Street, with its tall windows and creaking floors.',
+    'Children came after school to read comics in the corner. Retirees argued gently about crossword clues. Nobody was ever in a hurry.',
+    'The vote was unanimous. The library stayed open, and the floors kept creaking, exactly as they should.',
+  ];
+  const imgs = [];
+  for (let i = 0; i < scanBodies.length; i++) {
+    await maker.setViewportSize({ width: 816, height: 1056 });
+    await maker.setContent(`<html><body style="margin:0">${scanPage(i + 1, scanBodies[i])}</body></html>`);
+    imgs.push((await maker.screenshot({ type: 'png' })).toString('base64'));
+  }
+  await maker.setContent(`<html><body style="margin:0">${imgs.map((b) => `<img src="data:image/png;base64,${b}" style="width:8.5in;height:11in;display:block;break-after:page">`).join('')}</body></html>`);
+  pdfs['scan.pdf'] = await maker.pdf({ width: '8.5in', height: '11in', margin: { top: 0, bottom: 0, left: 0, right: 0 } });
   await maker.setContent('<html><body><svg width="600" height="800"><rect width="600" height="800" fill="#eee"/><circle cx="300" cy="300" r="120" fill="#888"/></svg></body></html>');
-  pdfs['scan.pdf'] = await maker.pdf({ format: 'Letter' });
+  pdfs['blank.pdf'] = await maker.pdf({ format: 'Letter' });
   await maker.close();
 
   const pdfTab = await ctx.newPage();
@@ -192,6 +209,11 @@ try {
   // Local file picker
   const local = await ctx.newPage();
   await local.goto(`chrome-extension://${extId}/pdf-reader.html`);
+  if (process.env.DEBUG) {
+    local.on('console', (m) => console.log('local console:', m.type(), m.text().slice(0, 240)));
+    local.on('pageerror', (e) => console.log('local error:', e.message));
+    const tick = setInterval(async () => { const t = await local.textContent('#status').catch(() => null); if (t === null) clearInterval(tick); else console.log('local status:', t.slice(0, 140)); }, 10000);
+  }
   const tmpPdf = join(ext, 'local-test.pdf');
   writeFileSync(tmpPdf, pdfs['book.pdf']);
   await local.setInputFiles('#file', tmpPdf);
@@ -199,12 +221,29 @@ try {
   check('local PDF files open from the picker', /12 paragraphs|13 paragraphs/.test(await local.textContent('#status')), await local.textContent('#status'));
   await local.keyboard.press('Escape');
 
-  // Scanned (image-only) PDF gets a clear message instead of silence
+  // Scanned (image-only) PDF: text is recognized, cleaned, then read
   writeFileSync(tmpPdf, pdfs['scan.pdf']);
   await local.reload();
   await local.setInputFiles('#file', tmpPdf);
-  await local.waitForFunction(() => /scanned/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  check('scanned PDFs explain why they can’t be read', true);
+  await local.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 180000 });
+  const scanText = await local.evaluate(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.article').innerText);
+  check('scanned PDFs are recognized and read', /text recognized from scans/.test(await local.textContent('#status'))
+    && /Every town has a place where time slows down/.test(scanText) && /The vote was unanimous/.test(scanText), (await local.textContent('#status')));
+  check('scan headers and page numbers are stripped', !/THE QUIET LIBRARY/.test(scanText) && !/^\s*[123]\s*$/m.test(scanText), JSON.stringify(scanText.slice(0, 100)));
+  await local.keyboard.press('Escape');
+  // A second open of the same scan uses the cache (no recognition step)
+  await local.reload();
+  const t0 = Date.now();
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => /paragraphs/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('recognized text is cached for next time', Date.now() - t0 < 5000, `${Date.now() - t0} ms`);
+  await local.keyboard.press('Escape');
+  // An image with no text at all gets a clear message
+  writeFileSync(tmpPdf, pdfs['blank.pdf']);
+  await local.reload();
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => /No readable text/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
+  check('PDFs with no text at all explain why', true);
   await local.close();
 
   const lib2 = await ctx.newPage();
