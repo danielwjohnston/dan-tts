@@ -364,36 +364,33 @@ async def extract_text(payload: ExtractTextRequest):
     return {"text": text, "title": title, "chars": len(text)}
 
 
-_CHROME_HINT = re.compile(r"sidebar|side-bar|menu|navbar|breadcrumb|cookie|comment|share|social|promo|advert|infobox|toc", re.I)
+_CHROME_HINT = re.compile(
+    r"(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc|masthead|site-header|site-footer)([-_]|$)",
+    re.I,
+)
 
 
 def _content_root(soup: BeautifulSoup):
     """Pick the element holding the article text, without reading site chrome.
 
     Sidebars, menus and boxes are dropped first, then the <main> or <article> wins
-    when present. Otherwise the block with the most paragraph text is used, so a
-    page's sidebar and header are not read aloud along with its content.
+    when present. Otherwise the whole <body> is read, so multi-chapter pages stay whole.
     """
     for tag in soup.find_all(attrs={"role": re.compile("navigation|complementary|banner|contentinfo")}):
         tag.decompose()
     for tag in soup.find_all(["aside", "menu"]):
         tag.decompose()
     for tag in soup.find_all(True):
-        if tag.parent is None:
+        if tag.parent is None or tag.name in ("html", "body", "main", "article"):
             continue
-        hint = " ".join(filter(None, [tag.get("id"), " ".join(tag.get("class") or [])]))
-        if hint and _CHROME_HINT.search(hint):
+        tokens = [tag.get("id") or ""] + list(tag.get("class") or [])
+        if any(_CHROME_HINT.search(token) for token in tokens):
             tag.decompose()
     for name in ("main", "article"):
         found = soup.find(name)
         if found is not None:
             return found
-    best, best_words = None, 0
-    for block in soup.find_all(["div", "section", "td"]):
-        words = sum(len(p.get_text(" ", strip=True).split()) for p in block.find_all("p", recursive=False))
-        if words > best_words:
-            best, best_words = block, words
-    return best or soup.body or soup
+    return soup.body or soup
 
 
 def _boundary_ms(boundary: dict) -> tuple:
