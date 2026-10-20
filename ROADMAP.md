@@ -20,6 +20,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Open any EPUB link or file** — the Books page only opens archive.org items by id, so a pasted `.epub` address (e.g. an archive.org download link) or a file on disk can't be read. Accept both, in the extension and the desktop app
 - **Run the extension's end-to-end tests in CI** — CI runs the desktop app's live test, but the extension's Chromium (28 checks) and Firefox (15 checks) tests only run by hand. Add them to `ci.yml`. Locally they need `CHROMIUM_PATH` pointed at a Chromium that can load extensions, or the service worker never starts; say so in the test's error message
 - **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
+- **Edge endpoint health check** — a scheduled job calls the voices list and a short synthesis, and alerts on failure. The engine depends on an unofficial endpoint and a token pinned in `engine/src/drm.js`; CI tests are offline, so nothing else would catch a change
+- **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
 
 ## Medium-Term
 
@@ -40,12 +42,14 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Keep the Firefox add-on installed** — Firefox only keeps signed add-ons. Sign the build as an unlisted add-on in CI (`web-ext sign`, needs free addons.mozilla.org API keys as repository secrets) and attach the `.xpi` to releases
 - **Desktop auto-update** — after releases exist: check the latest release on start and offer to update (`electron-updater`)
 - **Phone** — the reader as an installable web app (PWA) that appears in the phone's Share menu, so "Share → dan-tts" reads an article. Needs the Worker (or another server) for page downloads and voice headers, since a web page can't set them itself
+- **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
 ## Longer-Term / Experimental
 
 - ~~**PDF reading**~~ — Done in the extension for PDFs with a text layer (headers, footers and page numbers stripped, hyphenation rejoined). and scanned/image-only PDFs (on-device text recognition, cached). Next: more recognition languages
 - **Book audio** — cache generated audio + word timings per chapter for offline replay; export a book as an audiobook (one MP3 + SRT per chapter); optional separate voice for dialogue
 - **Books on the website** — "Load from URL" on a book returns its chapter list, and Batch exports one MP3 per chapter
+- **Calibre plugin, offline engine** — bundle the TTS engine into the Calibre plugin so it works without a server. Needs per-platform `aiohttp` wheels (or a stdlib WebSocket client). Only worth it if the thin client isn't enough
 - **Video generation** — Use ffmpeg to create MP4 videos with synchronized text highlighting (multiple styles: typewriter, split-screen, animated slides)
 - ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API), and Cloudflare Workers (front end + API in one Worker, `wrangler.jsonc`)
 - **Other formats on the Worker** — the Worker returns MP3 only; M4A/OGG/FLAC need ffmpeg, which only the Render backend has. Options: ffmpeg compiled to WebAssembly, or send those requests to Render
