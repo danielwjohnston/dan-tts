@@ -196,8 +196,11 @@ Option B adds roughly one more week for packaging and per-platform testing.
 - Edge terms of service. This is a user decision before any public release. The audio path
   itself is covered by the repo's earlier live checks (see `engine/README.md`) and the
   voices endpoint returned HTTP 200 from the session on 2026-10-20.
-- GUI viewer behaviour with an attached MP3/SRT. Headless tests covered search, metadata and
-  export (below); the GUI itself was not run.
+- What the viewer displays for an attached MP3 or SRT. `ebook-viewer` launches on the book's
+  `.txt`, `.mp3` and `.srt` files without crashing (it ran until the 30 s timeout each time),
+  but the window can't be seen headlessly, so the rendered content is unverified. Calibre's
+  viewer is for book formats; a plugin should open audio with the system player instead of
+  relying on the viewer.
 
 ## Runtime checks (Calibre 9.16.0 installed in the sandbox, 2026-10-20)
 
