@@ -34,3 +34,20 @@ rate, clips over 15 seconds, duplicate or empty entries. Warnings: clipping, ver
 clips, very short clips, transcripts without final punctuation, WAVs not in metadata.
 
 Run the tests with `python -m pytest tests/test_voice_tools.py`.
+
+## 4. Fine-tune (needs a GPU)
+
+```bash
+git clone https://github.com/OHF-Voice/piper1-gpl.git ~/piper1-gpl
+cd ~/piper1-gpl && python3 -m venv .venv && source .venv/bin/activate
+python3 -m pip install -e '.[train]' && ./build_monotonic_align.sh
+cd -
+voice-training/train.sh voice-training/dataset ~/piper1-gpl dan en-us ~/checkpoints/medium.ckpt
+```
+
+`train.sh` validates the dataset, writes `dataset/piper_metadata.csv` (Piper's
+`file.wav|text` format), and runs `piper.train fit` using the documented flags. It is
+untested here because this container has no GPU. The flags come from piper1-gpl's
+`docs/TRAINING.md`. That page does not give a Python version, PyTorch/CUDA install, a
+checkpoint download command, or a recommended epoch count, so check those on the training
+machine. The script uses 100 epochs as a placeholder.
