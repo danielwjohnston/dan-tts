@@ -69,8 +69,10 @@ over HTTP, which needs no third-party Python packages at all.
     time, dispatches a `format_added` event, and queues a full-text search job.
   - With `run_hooks=True` (the default), plugin import and post-import hooks run. Plugin
     code that adds audio should decide explicitly whether to run them.
-  - Sources: the signature and side-effect order were read from the file; the backend write
-    itself (`self.backend.add_format`) was not in the fetched text.
+  - Backend write (`src/calibre/db/backend.py`): the destination is `<book folder>/<name>.<fmt>`;
+    the folder is created if missing; a stream is written to a temp file and renamed over the
+    destination, or written in place if that fails; a path source uses `os.replace`. The backend
+    does not update the format or size tables. The caller (`cache.py`) does that.
 - Long work runs as a background job through Calibre's job system (`ThreadedJob` /
   `BaseJob`), so the GUI stays responsive and progress shows in Calibre's job manager.
   Synthesis of a whole book is minutes long, so this is required, not optional.
@@ -191,7 +193,11 @@ Option B adds roughly one more week for packaging and per-platform testing.
 
 ## Items not verified in this study
 
-- Current Edge endpoint behaviour; the study relies on the repo's existing engine tests,
-  not a live check.
+- Edge endpoint: the voices-list URL returned HTTP 200 from the session on 2026-10-20 with the
+  token pinned in `engine/src/drm.js`. That confirms reachability and the token, not the
+  audio path (WebSocket synthesis was not exercised live), and not the terms of service.
 - Runtime behaviour of `db.add_format` with MP3 and SRT in a real library (viewer, search,
   and metadata effects). The source below is verified; running it is not.
+- Build-time Python version function. Not found in `setup/__init__.py`, `setup/build_environment.py`,
+  or `bypy/linux/__main__.py`; `bypy/constants.py` and `bypy/__init__.py` do not exist at those paths.
+  The declared minimum (`>=3.14`) is the answer used in this study.
