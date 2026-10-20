@@ -34,6 +34,8 @@
     <label class="row"><input type="checkbox" id="c-own"> I am the person speaking, or I have the right to record this voice.</label>
     <label class="row"><input type="checkbox" id="c-train"> I agree that my recordings may be used to train and publicly release a synthetic voice, and that the voice may be used to read text aloud.</label>
     <label class="row"><input type="checkbox" id="c-withdraw"> I understand that this permission is irrevocable. Once my recordings are used for training, they can't be removed from the model, and I won't ask for that.</label>
+    <label class="row">Country I'm in: <input type="text" id="c-country" autocomplete="country-name" placeholder="e.g. United States"></label>
+    <p class="muted" id="country-note"></p>
     <p><button class="primary" id="consent-go" disabled>Continue</button></p>
     <details><summary class="muted">Who sees my recordings?</summary>
       <p class="muted">Not decided yet. This section must be filled in before the page is published.</p>
@@ -79,11 +81,24 @@ const CONSENT_VERSION = "draft-1";
 const $ = (id) => document.getElementById(id);
 const state = { order: [...PROMPTS], index: 0, pending: null, kept: [], consent: null };
 
-// Consent: all three boxes must be ticked before recording.
-function checkConsent() { $("consent-go").disabled = !["c-own", "c-train", "c-withdraw"].every((id) => $(id).checked); }
-["c-own", "c-train", "c-withdraw"].forEach((id) => $(id).addEventListener("change", checkConsent));
+// Countries where a contributor can't take part. Filled in by the project owner, not by this page.
+// Matching is case-insensitive on the name the contributor types. Empty means no restriction.
+const BLOCKED_COUNTRIES = [];
+
+// Consent: all three boxes and a country must be given before recording.
+// The country check is a convenience, not verification: contributors answer it themselves.
+function isBlocked(country) {
+  return BLOCKED_COUNTRIES.some((c) => c.toLowerCase() === country.trim().toLowerCase());
+}
+function checkConsent() {
+  const country = $("c-country").value.trim();
+  const blocked = country !== "" && isBlocked(country);
+  $("country-note").textContent = blocked ? "Sorry, contributions from this country aren't accepted." : "";
+  $("consent-go").disabled = blocked || country === "" || !["c-own", "c-train", "c-withdraw"].every((id) => $(id).checked);
+}
+["c-own", "c-train", "c-withdraw", "c-country"].forEach((id) => $(id).addEventListener("input", checkConsent));
 $("consent-go").addEventListener("click", () => {
-  state.consent = { version: CONSENT_VERSION, acceptedAt: new Date().toISOString() };
+  state.consent = { version: CONSENT_VERSION, acceptedAt: new Date().toISOString(), country: $("c-country").value.trim() };
   $("consent-card").hidden = true;
   $("record-card").hidden = false;
   showPrompt();
