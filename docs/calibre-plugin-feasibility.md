@@ -56,6 +56,21 @@ over HTTP, which needs no third-party Python packages at all.
   `None`.
 - Docs version: the manual page fetched is for calibre 9.16.0, so the study targets the
   current release line rather than 8.x.
+- Python version: calibre's `pyproject.toml` declares `requires-python = ">=3.14"`
+  (https://github.com/kovidgoyal/calibre/blob/master/pyproject.toml). A plugin should be
+  written and tested against that interpreter. The build-time version function was not
+  located, so this is the declared minimum rather than a confirmed embedded build.
+- `db.add_format` (from `src/calibre/db/cache.py` on calibre master):
+  - Signature: `add_format(self, book_id, fmt, stream_or_path, replace=True, run_hooks=True, dbapi=None)`.
+  - `replace` defaults to **True**, so adding an MP3 format to a book that already has one
+    overwrites it silently unless the plugin passes `replace=False`.
+  - With `replace=False` and an existing file, it returns `False` before any write.
+  - It writes through the backend, records the format and its size, updates the last-modified
+    time, dispatches a `format_added` event, and queues a full-text search job.
+  - With `run_hooks=True` (the default), plugin import and post-import hooks run. Plugin
+    code that adds audio should decide explicitly whether to run them.
+  - Sources: the signature and side-effect order were read from the file; the backend write
+    itself (`self.backend.add_format`) was not in the fetched text.
 - Long work runs as a background job through Calibre's job system (`ThreadedJob` /
   `BaseJob`), so the GUI stays responsive and progress shows in Calibre's job manager.
   Synthesis of a whole book is minutes long, so this is required, not optional.
@@ -176,10 +191,7 @@ Option B adds roughly one more week for packaging and per-platform testing.
 
 ## Items not verified in this study
 
-- The Python version calibre's embedded interpreter runs. Neither the manual's plugin
-  page nor the release notes (first 100k characters) state it, and the rest of the release
-  notes page was checked for "Python" with no matches. Confirm from the calibre source or
-  by running `calibre-debug -c "import sys; print(sys.version)"` on a real install.
-- Whether `db.add_format` accepts MP3 and SRT without side effects. Needs a real library.
 - Current Edge endpoint behaviour; the study relies on the repo's existing engine tests,
   not a live check.
+- Runtime behaviour of `db.add_format` with MP3 and SRT in a real library (viewer, search,
+  and metadata effects). The source below is verified; running it is not.
