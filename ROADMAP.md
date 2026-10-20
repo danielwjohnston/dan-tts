@@ -16,6 +16,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Update `worker/README.md`** — its setup steps (API token, GitHub secrets, Actions) predate the Git-connected deploy and the combined site + API Worker in the root `wrangler.jsonc`
 - **Skip the Python install in Cloudflare builds** — each build runs `pip install -r requirements.txt` (about 10s) because `requirements.txt` is at the repo root; the Worker doesn't use it. Turn it off with a build variable in the dashboard (check Cloudflare's docs for the current name)
 - **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
+- **Edge endpoint health check** — a scheduled job calls the voices list and a short synthesis, and alerts on failure. The engine depends on an unofficial endpoint and a token pinned in `engine/src/drm.js`; CI tests are offline, so nothing else would catch a change
+- **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
 
 ## Medium-Term
 
@@ -30,12 +32,14 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
   3. **Wikisource importer** — on a "versions" page (e.g. *The Time Machine*) pick an edition; fetch its chapter subpages through the MediaWiki API and save the text
   4. **Save as book** for PDFs already opened in the PDF reader
 - **EPUB import** — read EPUB files (Wikisource's own export, Project Gutenberg, etc.) into a Book
+- **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
 ## Longer-Term / Experimental
 
 - ~~**PDF reading**~~ — Done in the extension for PDFs with a text layer (headers, footers and page numbers stripped, hyphenation rejoined). and scanned/image-only PDFs (on-device text recognition, cached). Next: more recognition languages
 - **Book audio** — cache generated audio + word timings per chapter for offline replay; export a book as an audiobook (one MP3 + SRT per chapter); optional separate voice for dialogue
 - **Books on the website** — "Load from URL" on a book returns its chapter list, and Batch exports one MP3 per chapter
+- **Calibre plugin, offline engine** — bundle the TTS engine into the Calibre plugin so it works without a server. Needs per-platform `aiohttp` wheels (or a stdlib WebSocket client). Only worth it if the thin client isn't enough
 - **Video generation** — Use ffmpeg to create MP4 videos with synchronized text highlighting (multiple styles: typewriter, split-screen, animated slides)
 - ~~**Deployment**~~ — Done: GitHub Pages (front end) + Render free plan (API), and Cloudflare Workers (front end + API in one Worker, `wrangler.jsonc`)
 - **Other formats on the Worker** — the Worker returns MP3 only; M4A/OGG/FLAC need ffmpeg, which only the Render backend has. Options: ffmpeg compiled to WebAssembly, or send those requests to Render
