@@ -59,3 +59,32 @@ test('a paragraph continues across a page break', () => {
 test('empty input yields no blocks', () => {
   assert.deepStrictEqual(pagesToBlocks([[], []]), []);
 });
+
+const { ocrPagesToBlocks } = require('../lib/pdf-text.js');
+
+test('OCR pages: page numbers and running headers removed', () => {
+  // Realistic pages: several distinct body lines between the header and the page number
+  const body = ['Every town has a place where time slows down.', 'Children came after school to read comics.', 'Nobody was ever in a hurry there at all.'];
+  const pages = [1, 2, 3].map((n) => ['THE QUIET LIBRARY', `${body[n - 1]}\nIt was page ${n} of the story.\nThe floors creaked softly${n}.`, String(n)]);
+  const text = ocrPagesToBlocks(pages).map((b) => b.text);
+  assert.strictEqual(text.length, 3);
+  assert.ok(text.every((t, i) => t.startsWith(body[i])));
+  assert.ok(!text.join(' ').includes('THE QUIET LIBRARY'));
+});
+
+test('OCR pages: hyphenated line breaks rejoin and lines flow into one paragraph', () => {
+  assert.deepStrictEqual(ocrPagesToBlocks([['It was an extra-\nordinary day\nat the library.']]).map((b) => b.text), ['It was an extraordinary day at the library.']);
+});
+
+test('OCR pages: a sentence continuing across pages is merged', () => {
+  const blocks = ocrPagesToBlocks([['The council proposed closing the'], ['library, but the town said no.']]);
+  assert.deepStrictEqual(blocks.map((b) => b.text), ['The council proposed closing the library, but the town said no.']);
+});
+
+test('OCR pages: a header glued onto the first paragraph is still removed', () => {
+  const body = ['Every town has a place where time slows down.', 'Children came after school to read comics.', 'Nobody was ever in a hurry there at all.'];
+  const pages = [1, 2, 3].map((n) => [`THE QUIET LIBRARY\n${body[n - 1]}\nMore words follow on this line.\nAnd the paragraph ends here.`, String(n)]);
+  const text = ocrPagesToBlocks(pages).map((b) => b.text);
+  assert.deepStrictEqual(text.map((t) => t.split(' ').slice(0, 3).join(' ')), body.map((t) => t.split(' ').slice(0, 3).join(' ')));
+  assert.ok(!text.join(' ').includes('THE QUIET LIBRARY') && !/\b[123]$/.test(text.join(' ')));
+});

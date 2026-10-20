@@ -1,6 +1,7 @@
 // PDF reader page: extract text with pdf.js, rebuild paragraphs, then hand them to the
 // same reader UI the content script uses on web pages (overlay, highlighting, resume).
 import * as pdfjs from './lib/pdfjs/pdf.min.mjs';
+import Tesseract from './lib/tesseract/tesseract.esm.min.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdfjs/pdf.worker.min.mjs');
 
@@ -23,6 +24,65 @@ function loadReader() {
   return contentLoaded;
 }
 
+// ---- OCR for scanned (image-only) PDFs ----
+// Results are cached in IndexedDB per document, so a scanned book is recognized once.
+const idb = () => new Promise((resolve, reject) => {
+  const req = indexedDB.open('dan-tts', 1);
+  req.onupgradeneeded = () => req.result.createObjectStore('ocr');
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+});
+async function ocrCache(key, value) {
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('ocr', value === undefined ? 'readonly' : 'readwrite');
+    const req = value === undefined ? tx.objectStore('ocr').get(key) : tx.objectStore('ocr').put(value, key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function ocrPages(doc, cacheKey) {
+  const cached = await ocrCache(cacheKey).catch(() => null);
+  if (cached) return cached;
+  setStatus('Scanned PDF: loading text recognition (first time downloads ~4 MB of English language data)…');
+  // Surface engine failures instead of hanging on "loading…"
+  let failEngine;
+  const engineFailed = new Promise((_, reject) => { failEngine = reject; });
+  const guard = (p) => Promise.race([p, engineFailed]);
+  const worker = await guard(Tesseract.createWorker('eng', 1, {
+    workerPath: chrome.runtime.getURL('lib/tesseract/worker.min.js'),
+    corePath: chrome.runtime.getURL('lib/tesseract/tesseract-core-simd-lstm.wasm.js'),
+    workerBlobURL: false, // extension CSP doesn't allow blob: workers
+    errorHandler: (e) => failEngine(new Error(`text recognition failed: ${e?.message || e}`)),
+  }));
+  try {
+    const pages = [];
+    const started = Date.now();
+    for (let i = 1; i <= doc.numPages; i++) {
+      const left = i > 1 ? Math.round(((Date.now() - started) / (i - 1)) * (doc.numPages - i + 1) / 1000) : null;
+      setStatus(`Recognizing text: page ${i} of ${doc.numPages}${left !== null ? ` (about ${left < 90 ? `${left} s` : `${Math.round(left / 60)} min`} left)` : ''}… This only happens once per PDF.`);
+      setProgress((i - 1) / doc.numPages);
+      const page = await doc.getPage(i);
+      const base = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: Math.min(3, 2000 / base.width) });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      const { data } = await guard(worker.recognize(canvas, {}, { blocks: true }));
+      pages.push((data.blocks || []).flatMap((b) => b.paragraphs || [])
+        .filter((p) => p.confidence >= 30 && p.text.trim())
+        .map((p) => p.text.trim()));
+      page.cleanup();
+    }
+    await ocrCache(cacheKey, pages).catch(() => {});
+    return pages;
+  } finally {
+    await worker.terminate();
+  }
+}
+
 async function readPdf(data, { title, url, id }) {
   setStatus('Opening PDF…');
   setProgress(0);
@@ -34,13 +94,16 @@ async function readPdf(data, { title, url, id }) {
     setProgress(i / doc.numPages);
     pages.push((await (await doc.getPage(i)).getTextContent()).items);
   }
-  const blocks = danPdfText.pagesToBlocks(pages);
+  let blocks = danPdfText.pagesToBlocks(pages);
   const chars = blocks.reduce((n, b) => n + b.text.length, 0);
-  setProgress(null);
+  let scanned = false;
   if (chars < 40 * doc.numPages && chars < 400) {
-    setStatus('This PDF looks like scanned images with no text layer, so there is nothing to read yet. (Text recognition for scans is planned.)', true);
-    return;
+    // No text layer: it's a scan. Recognize the text from the page images.
+    scanned = true;
+    blocks = danPdfText.ocrPagesToBlocks(await ocrPages(doc, `${id}:${doc.numPages}`));
+    if (!blocks.length) { setProgress(null); setStatus('No readable text was found in this scanned PDF.', true); return; }
   }
+  setProgress(null);
   // PDF title metadata is often junk ("about:blank", "Microsoft Word - draft.docx", "untitled")
   const metaTitle = (meta?.info?.Title || '').trim();
   const junk = !metaTitle || /^(about:blank|untitled|document\d*|microsoft (word|powerpoint)\b.*|.*\.(docx?|pptx?|pdf|indd|tex))$/i.test(metaTitle) || /^[a-z]+:\/\//i.test(metaTitle);
@@ -52,7 +115,7 @@ async function readPdf(data, { title, url, id }) {
   window.__danTtsDocUrl = url;
   window.__danTtsDocId = id;
   document.title = `${docTitle} · dan-tts`;
-  setStatus(`${doc.numPages} pages · ${blocks.length} paragraphs`);
+  setStatus(`${doc.numPages} pages · ${blocks.length} paragraphs${scanned ? ' · text recognized from scans' : ''}`);
   await loadReader();
   window.__danTtsStart('page');
 }

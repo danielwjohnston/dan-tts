@@ -96,7 +96,50 @@
     return blocks;
   }
 
-  const api = { itemsToLines, pagesToBlocks };
+  /**
+   * Clean paragraphs recognized from scanned pages (OCR output): drop page numbers and
+   * running headers/footers, rejoin hyphenated line breaks, and merge paragraphs that
+   * continue across a page break.
+   * @param {string[][]} pages  paragraph texts per page, in reading order (lines separated by \n)
+   * @returns {{ tag: 'p', text: string }[]}
+   */
+  function ocrPagesToBlocks(pages) {
+    // Work on lines: OCR often glues a running header onto the first paragraph
+    const pageLines = pages.map((paras) => paras.flatMap((t, p) => t.split('\n').map((l) => l.trim()).filter(Boolean).map((text) => ({ text, p }))));
+    const counts = new Map();
+    for (const lines of pageLines) {
+      const edges = new Set([...lines.slice(0, 2), ...lines.slice(-2)].map((l) => shape(l.text)));
+      for (const e of edges) counts.set(e, (counts.get(e) || 0) + 1);
+    }
+    const repeated = new Set([...counts].filter(([k, n]) => pageLines.length >= 3 && n >= pageLines.length * 0.5 && k.length < 80).map(([k]) => k));
+    const blocks = [];
+    for (const lines of pageLines) {
+      const kept = lines.filter((l, i) => {
+        const edge = i < 2 || i >= lines.length - 2;
+        return !(edge && (PAGE_NUMBER.test(l.text) || repeated.has(shape(l.text))));
+      });
+      // Regroup lines into their paragraphs, rejoining hyphenated line breaks
+      const paras = [];
+      for (const l of kept) {
+        const last = paras[paras.length - 1];
+        if (last && last.p === l.p) {
+          last.text = /[A-Za-z]-$/.test(last.text) && /^[a-z]/.test(l.text) ? last.text.slice(0, -1) + l.text : `${last.text} ${l.text}`;
+        } else paras.push({ p: l.p, text: l.text });
+      }
+      paras.forEach(({ text }, i) => {
+        const prev = blocks[blocks.length - 1];
+        // First paragraph on a page continuing a sentence from the previous page
+        if (i === 0 && prev && !/[.!?:"”’)]$/.test(prev.text) && /^[a-z]/.test(text)) {
+          prev.text = /[A-Za-z]-$/.test(prev.text) ? prev.text.slice(0, -1) + text : `${prev.text} ${text}`;
+        } else {
+          blocks.push({ tag: 'p', text: text.replace(/\s+/g, ' ').trim() });
+        }
+      });
+    }
+    return blocks;
+  }
+
+  const api = { itemsToLines, pagesToBlocks, ocrPagesToBlocks };
   root.danPdfText = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
