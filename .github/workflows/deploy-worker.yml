@@ -1,13 +1,13 @@
 name: Deploy Cloudflare Worker
 
-# Deploys worker/ (the dan-tts API on Cloudflare's free plan). Needs two repository
+# Deploys the dan-tts Worker (API in worker/ plus the static front end) from the root wrangler.jsonc. Needs two repository
 # secrets, CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID; see worker/README.md.
 # Without them this workflow skips instead of failing.
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['worker/**', 'engine/src/**', '.github/workflows/deploy-worker.yml']
+    paths: ['worker/**', 'engine/src/**', 'wrangler.jsonc', 'demo.html', 'tester.html', 'static/**', 'samples/**', '.github/workflows/deploy-worker.yml']
 
 permissions:
   contents: read
@@ -39,6 +39,5 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: worker
           wranglerVersion: '4.151.2'
           command: deploy

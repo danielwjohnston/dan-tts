@@ -78,6 +78,10 @@ The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is stati
 
 Two free options: **Cloudflare Workers** (never sleeps; see [`worker/`](worker/) for a 10-minute browser-only setup) or **Render** (below).
 
+The Cloudflare deploy is configured by the root `wrangler.jsonc`: one Worker serves the API from `worker/` and the
+front end (`demo.html` at `/`, `tester.html`, `static/`, `samples/`) as static assets. Its build step assembles
+`_site/`, so a Cloudflare Git build needs only the deploy command `npx wrangler deploy` from the repo root.
+
 ### Render
 
 `render.yaml` deploys the API on Render's free plan using the Dockerfile:
