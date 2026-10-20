@@ -1,0 +1,4 @@
+tesseract.js 7.0.0 + tesseract.js-core 7.0.0 (Apache-2.0), unmodified:
+- dist/tesseract.esm.min.js, dist/worker.min.js
+- tesseract-core-simd-lstm.wasm.js (SIMD + LSTM only; every Chrome that meets the extension minimum supports WASM SIMD)
+English language data (@tesseract.js-data/eng) is downloaded from jsDelivr on first use and cached by tesseract.js.
