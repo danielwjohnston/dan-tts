@@ -1,0 +1,58 @@
+name: Desktop app
+
+# Builds the dan-tts Reader desktop app for Windows, macOS and Linux (unsigned) and runs its
+# end-to-end test on Linux. Installers are attached to each run under "Artifacts".
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['desktop/**', 'extension/**', 'engine/src/**', 'scripts/sync-desktop.mjs', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', 'extension/**', 'engine/src/**', 'scripts/sync-desktop.mjs', '.github/workflows/desktop.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: desktop
+      - run: npm install --no-save playwright@1.56.1
+        working-directory: desktop
+      - run: xvfb-run -a npm test
+        working-directory: desktop
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run dist
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false' # unsigned builds
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dan-tts-reader-${{ runner.os }}
+          path: |
+            desktop/out/*.exe
+            desktop/out/*.dmg
+            desktop/out/*.zip
+            desktop/out/*.AppImage
+          if-no-files-found: error
+          retention-days: 30

@@ -181,3 +181,12 @@ async function openUrl() {
   }
 }
 if (src) openUrl();
+
+// Desktop app: a file picked on its home page is handed over through IndexedDB
+const handoff = new URLSearchParams(location.search).get('handoff');
+if (handoff && window.danDesktop) {
+  import('./store.js').then(({ takeHandoff }) => takeHandoff(handoff)).then((item) => {
+    if (item) openFile(new File([item.data], item.name, { type: item.type }));
+    else setStatus('That file is no longer available. Choose it again.', true);
+  });
+}
