@@ -82,10 +82,15 @@ class TTSPlayer {
     audio.src = URL.createObjectURL(audioBlob);
     
     // Render text with word spans
-    const words = data.boundaries.map(b => b.text);
-    highlight.innerHTML = words.map((word, i) => 
-      `<span class="tts-word">${word}</span>${i < words.length - 1 ? ' ' : ''}`
-    ).join('');
+    // Build spans with textContent: word text comes from user input and must not be parsed as HTML
+    highlight.textContent = '';
+    data.boundaries.forEach((b, i) => {
+      if (i) highlight.appendChild(document.createTextNode(' '));
+      const span = document.createElement('span');
+      span.className = 'tts-word';
+      span.textContent = b.text;
+      highlight.appendChild(span);
+    });
     
     const wordSpans = highlight.querySelectorAll('.tts-word');
     

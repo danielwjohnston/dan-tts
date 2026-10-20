@@ -6,8 +6,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 
 - ~~**SRT caption export**~~ — Done
 - ~~**Paragraph chunking**~~ — Done: long text is split into paragraphs and synthesized in sequence with a progress bar
-- **Batch synthesis** — Queue multiple texts, download as zip
-- **Improved embed workflow** — Export a self-contained HTML file (audio + player + timing in one file) instead of requiring 3 separate files
+- ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
+- ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
 
 ## Medium-Term
 
