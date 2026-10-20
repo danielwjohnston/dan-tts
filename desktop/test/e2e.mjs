@@ -18,6 +18,7 @@ const electronPath = createRequire(import.meta.url)('electron'); // path to the 
 const server = createServer((req, res) => {
   const file = req.url.slice(1);
   if (file.endsWith('.pdf')) { res.setHeader('Content-Type', 'application/pdf'); res.end(readFileSync(join(fixtures, file))); return; }
+  if (file.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(fixtures, file))); return; }
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(readFileSync(join(fixtures, 'article.html')));
 });
@@ -95,11 +96,37 @@ try {
   check('scanned PDF from disk: text recognized and read', /The vote was unanimous/.test(scanText) && !/THE QUIET LIBRARY/.test(scanText), await win.textContent('#status'));
   await win.keyboard.press('Escape');
 
-  // 5. Library: everything is listed, and pasted text reopens where it left off
+  // 5. Books: an EPUB link, an EPUB file from disk, and an archive.org item
+  await win.goto('app://reader/home.html');
+  await win.fill('#url', `${origin}/book.epub`);
+  await win.click('#url-form button');
+  await win.waitForSelector('#chapters li', { timeout: 30000 });
+  const toc = (await win.textContent('#toc-view')).replace(/\s+/g, ' ');
+  check('EPUB link opens as a book with its chapters', /The Lighthouse Keeper/.test(toc) && /The Storm/.test(toc) && /Morning Light/.test(toc), toc.slice(0, 120));
+  await win.click('#chapters li:nth-child(2) a');
+  await win.waitForSelector('#article p');
+  await win.click('#read');
+  await waitActive();
+  const chapterText = await shadow(`return root.querySelector('.article').innerText;`);
+  check('book chapter is read aloud', /By dawn the sea was calm/.test(chapterText) && !/The wind rose|Chapters/.test(chapterText) && (await advancing()).length >= 3, chapterText.slice(0, 80));
+  await win.waitForTimeout(2500);
+  await win.keyboard.press('Escape');
+
+  await win.goto('app://reader/home.html');
+  await win.setInputFiles('#file', join(fixtures, 'book.epub'));
+  await win.waitForSelector('#chapters li', { timeout: 30000 });
+  check('EPUB file from disk opens as a book', /book\.html\?file=/.test(win.url()) && (await win.locator('#chapters li').count()) === 2, win.url());
+
+  await win.goto('app://reader/book.html?id=aristotlesmetaph0001aris');
+  await win.waitForSelector('#chapters li', { timeout: 120000 }).catch(() => {});
+  const aristotle = await win.locator('#chapters li').count();
+  check('archive.org book opens (Aristotle\'s Metaphysics)', aristotle > 50, `${aristotle} chapters; ${await win.textContent('#toc-status')}`);
+
+  // 6. Library: everything is listed, and pasted text reopens where it left off
   await win.goto('app://reader/home.html');
   await win.waitForSelector('#library li');
   const lib = (await win.textContent('#library')).replace(/\s+/g, ' ');
-  check('library lists the page, text and PDFs', (await win.locator('#library li').count()) === 4 && /127\.0\.0\.1/.test(lib) && /Saved text/.test(lib) && /PDF/.test(lib), lib.slice(0, 160));
+  check('library lists the page, text, PDFs and book chapter', (await win.locator('#library li').count()) === 5 && /127\.0\.0\.1/.test(lib) && /Saved text/.test(lib) && /PDF/.test(lib) && /Book/.test(lib), lib.slice(0, 200));
   await win.locator('#library li', { hasText: 'Saved text' }).locator('a').click();
   await waitActive();
   check('reopening saved text resumes it', /Resumed/.test(await shadow(`return root.querySelector('.status').textContent;`)));
