@@ -88,3 +88,16 @@ test('OCR pages: a header glued onto the first paragraph is still removed', () =
   assert.deepStrictEqual(text.map((t) => t.split(' ').slice(0, 3).join(' ')), body.map((t) => t.split(' ').slice(0, 3).join(' ')));
   assert.ok(!text.join(' ').includes('THE QUIET LIBRARY') && !/\b[123]$/.test(text.join(' ')));
 });
+
+test('two pages are enough to spot a running header', () => {
+  const bodies = [['Every town has a place where time slows down and nobody hurries', 'In ours it was the library on Elm Street with its windows.'],
+    ['Children came after school to read comics in the quiet corner', 'Retirees argued gently about crossword clues all afternoon.']];
+  const pages = bodies.map((lines, i) => page(lines, { header: 'The Quiet Library — A Novel', footer: String(i + 1) }));
+  const text = pagesToBlocks(pages).map((b) => b.text).join(' ');
+  assert.ok(!/A Novel/.test(text) && /Every town/.test(text) && /Retirees/.test(text), text);
+});
+
+test('a single page keeps its first line (no way to tell a header from content)', () => {
+  const text = pagesToBlocks([page(['Chapter heading line', `${LONG}.`])]).map((b) => b.text).join(' ');
+  assert.ok(text.startsWith('Chapter heading line'));
+});

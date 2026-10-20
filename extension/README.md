@@ -2,7 +2,7 @@
 
 Read any web page, or just the part you select, aloud in Microsoft's natural voices, with each word highlighted as it's spoken. **No server, no account, free.** The extension talks to the voice service directly using the [dan-tts engine](../engine/).
 
-Works in **Chrome, Edge, Brave, Arc, Vivaldi and Opera** (Chromium 116+). Firefox and Safari aren't supported yet.
+Works in **Chrome, Edge, Brave, Arc, Vivaldi and Opera** (Chromium 116+) and **Firefox 140+**. Safari isn't supported.
 
 ## Install (about a minute)
 
@@ -13,6 +13,19 @@ Works in **Chrome, Edge, Brave, Arc, Vivaldi and Opera** (Chromium 116+). Firefo
 5. Optional: pin **dan-tts Reader** to the toolbar from the puzzle-piece menu.
 
 To update later, pull or download the repo again and click the ↻ reload button on the extension's card.
+
+## Install in Firefox
+
+Firefox uses its own build of the same code:
+
+1. **Get the Firefox build.** On GitHub, open **Actions** → the latest green **CI** run → **Artifacts** → download **dan-tts-firefox** and unzip it. Or, with Node installed, run `node scripts/build-firefox.mjs`, which writes `dist/firefox/`.
+2. **Try it now:** go to `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → pick `manifest.json` in that folder. Firefox removes temporary add-ons when it restarts.
+3. **Keep it permanently:** release Firefox only installs signed add-ons. Signing for your own use is free:
+   - Create a free account at https://addons.mozilla.org/developers/.
+   - Choose **Submit a New Add-on** → **On your own**, and upload `dist/dan-tts-firefox.zip` (or zip the folder from step 1).
+   - Mozilla's automated checks sign it, usually within minutes. Download the signed `.xpi` and open it in Firefox.
+
+   It stays private: "On your own" add-ons aren't listed on the site. Alternatively, Firefox Developer Edition or Nightly can run unsigned add-ons if you set `xpinstall.signatures.required` to `false` in `about:config`.
 
 ## Use
 
@@ -61,4 +74,5 @@ Nothing you read is sent anywhere except the text itself, which goes to Microsof
 - `background.js` handles entry points, the header rule and message relay. `offscreen.js` runs the engine and plays audio. `content.js` handles extraction, the reader UI, highlighting and saving progress. `library.html` and `library.js` are the library page. `pdf-reader.html` and `pdf-reader.js` are the PDF reader, using `lib/pdf-text.js` for paragraph reconstruction.
 - `engine/` and `lib/chunk-text.js` are **copies**. Edit `engine/src/` or `static/chunk-text.js`, then run `node scripts/sync-extension.mjs`. CI fails if they drift.
 - `lib/Readability.js` is Mozilla's [Readability](https://github.com/mozilla/readability) 0.6.0, `lib/pdfjs/` is Mozilla's [pdf.js](https://github.com/mozilla/pdf.js) 6.4.299 legacy build, and `lib/tesseract/` is [tesseract.js](https://github.com/naptha/tesseract.js) 7.0.0 (SIMD + LSTM core only). All are Apache 2.0, with licenses alongside.
-- Tests: `node --test extension/test/align.test.js extension/test/pdf-text.test.js` (offline), and `node extension/test/e2e.mjs` (needs Playwright and network access; loads the extension into Chromium and reads a test page with the live voice service).
+- **Firefox:** `node scripts/build-firefox.mjs` produces the Firefox build. Only the manifest differs: Firefox uses a background page instead of a service worker, and it has no offscreen documents, so the background page imports `offscreen.js` and plays audio itself. While reading, pages ping the background every 10 s, because Firefox suspends idle background pages after about 30 s, which would stop the audio.
+- Tests: `node --test extension/test/align.test.js extension/test/pdf-text.test.js` (offline). `node extension/test/e2e.mjs` runs Chromium with Playwright (28 checks). `FIREFOX_PATH=… PUPPETEER_MODULE=… node extension/test/e2e-firefox.mjs` runs Firefox via WebDriver BiDi with puppeteer-core (15 checks). Both need network access to the live voice service.

@@ -12,7 +12,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 ## Medium-Term
 
 - **SSML support** — Allow fine-grained control over pronunciation, pauses, emphasis, and speaking rate
-- ~~**Browser extension**~~ — Done: `extension/` reads pages and selections with no server (Chromium browsers; Firefox next)
+- ~~**Browser extension**~~ — Done: `extension/` reads pages and selections with no server (Chromium browsers and Firefox 140+)
 - **Voice comparison** — Synthesize same text with multiple voices side-by-side for easy A/B testing
 - **Persistent history** — Save synthesis history to localStorage or a lightweight database instead of session-only
   - Extension side done: the library remembers every page read, with resume position
