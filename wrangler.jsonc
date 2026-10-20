@@ -1,9 +1,12 @@
-// Cloudflare Workers deploy for the static front end (same files as GitHub Pages).
-// The FastAPI server needs ffmpeg and can't run on Workers; host it on Render (see README).
+// The one Cloudflare deploy for dan-tts: the Worker API in worker/ plus the static front end
+// (same files as GitHub Pages) as assets. Paths that match a file get the file; everything else,
+// e.g. /health, /voices, /synthesize, goes to the API. Both the dashboard's Git builds and
+// .github/workflows/deploy-worker.yml deploy from here.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dan-tts",
-  "compatibility_date": "2026-10-01",
+  "main": "worker/src/index.js",
+  "compatibility_date": "2026-09-01",
   "build": {
     "command": "rm -rf _site && mkdir _site && cp -r demo.html tester.html static samples _site/ && cp demo.html _site/index.html"
   },
