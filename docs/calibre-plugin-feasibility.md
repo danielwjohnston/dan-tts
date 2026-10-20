@@ -25,9 +25,15 @@ over HTTP, which needs no third-party Python packages at all.
     This is the right type for "Read aloud" / "Make audiobook".
   - **FileTypePlugin / Conversion**: not needed; we do not have to convert formats.
   - **Metadata / Store / Catalog**: not relevant.
-- Calibre's GUI is Qt. Recent Calibre releases use Qt6 (PyQt6), older ones Qt5. Check the
-  target Calibre version before writing widgets; the plugin should avoid Qt imports where
-  it can, since the built-in job and dialog helpers cover most needs.
+- Calibre's GUI is Qt. Recent Calibre releases use Qt6 (PyQt6), older ones Qt5. Since
+  calibre 5.13, plugins can use `from qt.core import ...` for Qt classes, which works on
+  both Qt5 and Qt6 builds, so one plugin can cover both. The plugin should still avoid Qt
+  where it can, since the built-in job and dialog helpers cover most needs.
+- Multi-file plugins need an empty `plugin-import-name-<name>.txt` marker in the zip, and
+  extra modules are imported via `calibre_plugins.<name>`. The GUI class (`InterfaceAction`)
+  should live in its own module, separate from `__init__.py`, because calibre also runs a
+  CLI that must not load GUI code. Source: calibre manual, "Writing your own plugins"
+  (https://manual.calibre-ebook.com/creating_plugins.html).
 - Long work runs as a background job through Calibre's job system (`ThreadedJob` /
   `BaseJob`), so the GUI stays responsive and progress shows in Calibre's job manager.
   Synthesis of a whole book is minutes long, so this is required, not optional.
@@ -148,8 +154,11 @@ Option B adds roughly one more week for packaging and per-platform testing.
 
 ## Items not verified in this study
 
-- Exact Calibre version that ships Qt6 and the exact Python minor version; check against the
-  Calibre release notes for the version you target.
+- Exact Calibre version that ships Qt6 and the exact Python minor version. Web search
+  indicated PyQt6 in calibre 8.x builds, but did not confirm the upstream Python version;
+  check the calibre release notes for the version you target.
+- The plugin manifest/`__init__.py` contents: the manual's tutorial was not retrieved in
+  full here, so the exact boilerplate still needs to be copied from the demo plugin.
 - Whether `db.add_format` accepts `MP3` and `SRT` without side effects on the viewer in
   the target version. Needs a quick test in a real library.
 - Current Edge endpoint behaviour; the study relies on the repo's existing engine tests,
