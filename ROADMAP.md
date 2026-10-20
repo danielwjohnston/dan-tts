@@ -17,7 +17,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Skip the Python install in Cloudflare builds** — each build runs `pip install -r requirements.txt` (about 10s) because `requirements.txt` is at the repo root; the Worker doesn't use it. Turn it off with a build variable in the dashboard (check Cloudflare's docs for the current name)
 - **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
 - **Edge endpoint health check** — a scheduled job calls the voices list and a short synthesis, and alerts on failure. The engine depends on an unofficial endpoint and a token pinned in `engine/src/drm.js`; CI tests are offline, so nothing else would catch a change
-- **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
+- **Edge terms: personal use only for now** — decided 2026-10-20. The unofficial endpoint and spoofed browser headers stay in personal use; nothing public ships on them. Public release waits on the Azure AI Speech item below
+- **Azure AI Speech as the public path** — Microsoft's official speech API, with the same neural voices, word-boundary events (what the highlighting needs), and documented terms. Free tier: 0.5 million characters per month for neural voices. Billing counts every character, spaces and punctuation included. Paid rates are on the Azure pricing calculator, not the public page. Still to do: an engine adapter, and a cost estimate for a whole book
 
 ## Medium-Term
 
@@ -32,7 +33,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
   3. **Wikisource importer** — on a "versions" page (e.g. *The Time Machine*) pick an edition; fetch its chapter subpages through the MediaWiki API and save the text
   4. **Save as book** for PDFs already opened in the PDF reader
 - **EPUB import** — read EPUB files (Wikisource's own export, Project Gutenberg, etc.) into a Book
-- **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
+- **Calibre plugin (v1)** — thin client to a dan-tts server, standard library only. Built in [`calibre-plugin/`](calibre-plugin/): reads EPUB and TXT, synthesizes in chunks in a background job, and attaches MP3 and SRT to the book. Build with `python scripts/build-calibre-plugin.py`, then load `dist/dan_tts_calibre.zip` in Calibre's plugin settings. Verified: offline tests, plugin loads in Calibre 9.16, and a real `add_format` attaches both files. Not yet: a click-through in the GUI, MOBI/AZW3 via `ebook-convert`, and a per-chunk cancel. Gotchas: `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
 ## Longer-Term / Experimental
 
