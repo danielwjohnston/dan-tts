@@ -48,7 +48,8 @@
       const edges = new Set([...lines.slice(0, 2), ...lines.slice(-2)].map((l) => shape(l.text)));
       for (const e of edges) edgeCounts.set(e, (edgeCounts.get(e) || 0) + 1);
     }
-    const repeated = new Set([...edgeCounts].filter(([, n]) => pageLines.length >= 3 && n >= pageLines.length * 0.5).map(([k]) => k));
+    // Two pages are enough: the same line at the top (or bottom) of both is a running header
+    const repeated = new Set([...edgeCounts].filter(([, n]) => n >= 2 && n >= pageLines.length * 0.5).map(([k]) => k));
 
     const all = pageLines.flatMap((lines, p) => lines
       .filter((l, i) => {
@@ -111,7 +112,7 @@
       const edges = new Set([...lines.slice(0, 2), ...lines.slice(-2)].map((l) => shape(l.text)));
       for (const e of edges) counts.set(e, (counts.get(e) || 0) + 1);
     }
-    const repeated = new Set([...counts].filter(([k, n]) => pageLines.length >= 3 && n >= pageLines.length * 0.5 && k.length < 80).map(([k]) => k));
+    const repeated = new Set([...counts].filter(([k, n]) => n >= 2 && n >= pageLines.length * 0.5 && k.length < 80).map(([k]) => k));
     const blocks = [];
     for (const lines of pageLines) {
       const kept = lines.filter((l, i) => {

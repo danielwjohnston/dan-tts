@@ -22,7 +22,8 @@ async function installHeaderRule() {
       condition: {
         urlFilter: '||speech.platform.bing.com',
         resourceTypes: ['websocket', 'xmlhttprequest'],
-        initiatorDomains: [chrome.runtime.id],
+        // The extension's own origin host: its id in Chrome, a per-install UUID in Firefox
+        initiatorDomains: [new URL(chrome.runtime.getURL('')).host],
       },
     }],
   });
@@ -107,7 +108,14 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 });
 chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });
 
+// Firefox has no offscreen documents: run the player inside this background page instead
+let inlinePlayer = null;
 async function sendToPlayer(msg) {
+  if (!chrome.offscreen) {
+    inlinePlayer ??= import('./offscreen.js').then((m) => { m.setEventSink(relayToTab); return m; });
+    (await inlinePlayer).handleCommand(msg);
+    return { ok: true };
+  }
   await ensureOffscreen();
   return chrome.runtime.sendMessage({ ...msg, target: 'offscreen' });
 }
@@ -122,6 +130,18 @@ async function getVoices() {
 }
 
 // ---- Relay ----
+// Player events → the tab being read. Extension pages (the PDF reader) hear an offscreen
+// player's broadcasts directly; with the inline (Firefox) player they need forwarding.
+function relayToTab(msg) {
+  if (activeTabId === null) return;
+  if (activeIsBook) { sendToBook(msg); return; }
+  if (activeIsExtensionPage) {
+    if (!chrome.offscreen) chrome.runtime.sendMessage(msg).catch(() => {});
+    return;
+  }
+  chrome.tabs.sendMessage(activeTabId, msg).catch(() => {});
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target === 'player' && sender.tab) {
     activeTabId = sender.tab.id;
@@ -130,16 +150,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendToPlayer(msg).then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
   }
-  if (msg.target === 'tab' && activeTabId !== null) {
-    if (activeIsBook) sendToBook(msg);
-    else if (!activeIsExtensionPage) chrome.tabs.sendMessage(activeTabId, msg).catch(() => {});
-    return false;
-  }
+  if (msg.target === 'tab') { relayToTab(msg); return false; }
   // The book page asks to read itself: it is a tab like any other, so the page reader applies
   if (msg.target === 'background' && msg.cmd === 'read-tab' && sender.tab) {
     startReading(sender.tab.id, 'page', true);
     return false;
   }
+  // Pages ping this while reading: Firefox suspends idle background pages (~30 s), which
+  // would stop audio played here. Harmless in Chrome.
+  if (msg.target === 'background' && msg.cmd === 'keepalive') { sendResponse({ ok: true }); return false; }
   if (msg.target === 'background' && msg.cmd === 'voices') {
     getVoices().then((voices) => sendResponse({ voices }), (e) => sendResponse({ error: e.message }));
     return true;

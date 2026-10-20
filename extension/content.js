@@ -142,16 +142,20 @@
         parent.appendChild(span);
       });
     };
-    const h1 = document.createElement('h1');
-    addWords(h1, title);
-    article.appendChild(h1);
+    // A title that's just the opening words (pasted text) would be read twice: don't speak it
+    const speakTitle = !window.__danTtsDoc?.hideTitle;
+    if (speakTitle) {
+      const h1 = document.createElement('h1');
+      addWords(h1, title);
+      article.appendChild(h1);
+    }
     if (byline) { const b = document.createElement('div'); b.className = 'byline'; b.textContent = byline; article.appendChild(b); }
     for (const block of blocks) {
       const el = document.createElement(block.tag === 'h' ? 'h2' : 'p');
       addWords(el, block.text);
       article.appendChild(el);
     }
-    return [title, ...blocks.map((b) => b.text)].join('\n\n');
+    return [...(speakTitle ? [title] : []), ...blocks.map((b) => b.text)].join('\n\n');
   }
 
   function buildSelection(sel) {
@@ -216,12 +220,13 @@
   let fingerprint = '';
   let lastSave = 0;
   let resumedNote = false;
+  let keepAlive = null;
   let lastPos = null; // latest { chunk, ticks, wordsDone }, saved for real every ~2 s and on close
   const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 
   function saveProgress(fields) {
     if (mode !== 'page') return;
-    const title = tokens.length ? article.querySelector('h1')?.textContent || document.title : document.title;
+    const title = window.__danTtsDoc?.title || article.querySelector('h1')?.textContent || document.title;
     chrome.storage.local.set({ [progressKey()]: { url: pageUrl(), title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
   }
 
@@ -260,10 +265,14 @@
       saveProgress({ chunk: startChunk, ticks: startTicks, wordsDone: chunkStart[startChunk] || 0, done: false });
     }
     toPlayer('load', { chunks, voice: settings.voice, rate: settings.rate, startChunk, startTicks });
+    // Keep the background alive while reading (Firefox plays audio there and suspends it after ~30 s idle)
+    clearInterval(keepAlive);
+    keepAlive = setInterval(() => chrome.runtime.sendMessage({ target: 'background', cmd: 'keepalive' }).catch(() => {}), 10000);
     loadVoices().catch(() => {});
   }
 
   function stop(hide = true) {
+    clearInterval(keepAlive);
     if (mode === 'page' && lastPos && state !== 'idle') saveProgress(lastPos); // exact spot on close
     lastPos = null;
     if (mode) toPlayer('stop');
@@ -356,6 +365,7 @@
       if (state === 'playing' && resumedNote) setTimeout(() => { resumedNote = false; }, 4000);
     } else if (msg.event === 'ended') {
       lastPos = null;
+      clearInterval(keepAlive);
       saveProgress({ chunk: 0, ticks: 0, wordsDone: tokens.length, done: true });
       state = 'idle';
       playBtn.textContent = '▶';

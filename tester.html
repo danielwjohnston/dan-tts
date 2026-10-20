@@ -140,6 +140,9 @@
         <input id="url-input" type="text" placeholder="https://example.com/article" />
         <button class="btn btn-secondary" id="load-url">Load</button>
       </div>
+      <div class="text-meta">
+        <span>Site blocks loading? Drag <a id="bookmarklet" href="#" title="Drag to your bookmarks bar">Send to Dan's TTS</a> to your bookmarks bar, then click it on any page (sends your selection, or the whole page).</span>
+      </div>
 
       <label>Text</label>
       <div class="text-wrap">
@@ -904,7 +907,15 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         logEl.textContent = `Loaded "${data.title || url}" (${data.chars} chars). Ready to synthesize.`;
       } catch (err) {
         console.error(err);
-        logEl.textContent = 'Error loading URL: ' + err.message;
+        logEl.textContent = 'Error loading URL: ' + err.message + ' ';
+        if (/^https?:\/\//i.test(url) || !url.includes('://')) {
+          const open = document.createElement('a');
+          open.href = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^\/+/, '')}`;
+          open.target = '_blank';
+          open.rel = 'noopener noreferrer';
+          open.textContent = 'Open in browser';
+          logEl.append(open, ' and use the "Send to Dan\'s TTS" bookmarklet or paste the text.');
+        }
       } finally {
         loadUrlBtn.disabled = false;
         loadUrlBtn.textContent = 'Load';
@@ -913,6 +924,18 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     urlInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); loadUrlBtn.click(); }
     });
+
+    /* ---- Bookmarklet: sends selection (or page text) here via #text= ---- */
+    document.getElementById('bookmarklet').href = 'javascript:(()=>{const t=(getSelection().toString()||document.body.innerText).slice(0,100000);'
+      + `window.open(${JSON.stringify(location.origin + location.pathname)}+'#text='+encodeURIComponent(t),'_blank')})()`;
+    if (location.hash.startsWith('#text=')) {
+      try {
+        textArea.value = decodeURIComponent(location.hash.slice(6));
+        updateCount();
+        logEl.textContent = 'Loaded text from bookmarklet. Ready to synthesize.';
+      } catch (e) { console.error(e); }
+      history.replaceState(null, '', location.pathname + location.search);
+    }
 
     /* ---- Init ---- */
     loadVoices();

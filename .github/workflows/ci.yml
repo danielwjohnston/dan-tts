@@ -25,3 +25,11 @@ jobs:
         working-directory: engine
       - run: node --test extension/test/align.test.js extension/test/pdf-text.test.js
       - run: node scripts/sync-extension.mjs --check
+      - run: node --check worker/src/index.js
+      # Firefox build of the extension, downloadable from the run's Artifacts
+      - run: node scripts/build-firefox.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dan-tts-firefox
+          path: dist/firefox/
+          retention-days: 30

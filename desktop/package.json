@@ -1,0 +1,63 @@
+{
+  "name": "dan-tts-desktop",
+  "productName": "dan-tts Reader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read web pages, PDFs (including scans) and text aloud with Microsoft's natural voices. No server.",
+  "main": "main.js",
+  "scripts": {
+    "prestart": "node ../scripts/sync-desktop.mjs",
+    "start": "electron .",
+    "test": "node ../scripts/sync-desktop.mjs && node test/e2e.mjs",
+    "dist": "node ../scripts/sync-desktop.mjs && electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.9.2",
+    "electron-builder": "26.15.3"
+  },
+  "author": "danielwjohnston",
+  "build": {
+    "appId": "io.github.danielwjohnston.dantts",
+    "productName": "dan-tts Reader",
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "out"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "syncDesktopName": true
+    },
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danielwjohnston/dan-tts.git"
+  },
+  "desktopName": "dan-tts-reader.desktop"
+}

@@ -294,6 +294,12 @@ async def _fetch_html(url: str) -> str:
                     if resp.status in (301, 302, 303, 307, 308) and "Location" in resp.headers:
                         url = urljoin(url, resp.headers["Location"])
                         continue
+                    if resp.status in (401, 403, 429):
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"{urlparse(url).hostname} blocked automated access (HTTP {resp.status}). "
+                            "Open the page in your browser and paste the text instead.",
+                        )
                     if resp.status != 200:
                         raise HTTPException(status_code=502, detail=f"URL returned HTTP {resp.status}")
                     body = bytearray()
