@@ -12,5 +12,7 @@
   },
   "assets": {
     "directory": "./_site"
-  }
+  },
+  // Required by `wrangler preview`, which Cloudflare's Git builds run for non-main branches.
+  "previews": {}
 }
