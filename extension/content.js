@@ -322,6 +322,8 @@
 
   // ---- Messages from the player (via the background worker) ----
   chrome.runtime.onMessage.addListener((msg) => {
+    // Book chapter pages receive every runtime message, so take only those addressed to this tab
+    if (msg.tabId !== undefined && msg.tabId !== window.__danTtsTabId) return;
     if (msg.event === 'start') { start(msg.mode); return; }
     if (!mode) return;
     if (msg.event === 'chunk') {

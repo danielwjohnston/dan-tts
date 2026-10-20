@@ -25,13 +25,17 @@
     button:hover { color: var(--fg); border-color: var(--border); }
     .remove { grid-column: 2; grid-row: 1 / 3; align-self: center; }
     .empty { color: var(--muted); text-align: center; padding: 48px 0; }
+    .books { color: var(--accent); font-size: 14px; margin-right: 12px; }
   </style>
 </head>
 <body>
   <main>
     <header>
       <h1>Library</h1>
-      <button id="clear" hidden>Clear all</button>
+      <span>
+        <a href="book.html" class="books">Find books</a>
+        <button id="clear" hidden>Clear all</button>
+      </span>
     </header>
     <p class="hint">Pages you've read with dan-tts. Open one and press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> (or click the toolbar icon) to pick up where you left off.</p>
     <ul id="list"></ul>

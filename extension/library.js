@@ -39,7 +39,11 @@ async function render() {
     const meta = document.createElement('div');
     meta.className = 'meta';
     let host = item.url;
-    try { host = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
+    try {
+      const url = new URL(item.url);
+      // Book chapters live on the extension's own pages; show where the book came from instead
+      host = url.protocol === 'chrome-extension:' ? 'archive.org' : url.hostname.replace(/^www\./, '');
+    } catch {}
     meta.textContent = `${host} · ${item.done ? 'Finished' : `${pct}% · paragraph ${(item.chunk || 0) + 1} of ${item.total || '?'}`} · ${ago(item.updatedAt)}`;
     const remove = document.createElement('button');
     remove.className = 'remove';

@@ -55,7 +55,26 @@ async function ensureOffscreen() {
 // ---- Start reading in a tab ----
 let activeTabId = null;
 
-export async function startReading(tabId, mode = 'auto') {
+// Book chapters are extension pages, which content scripts can't be injected into, so they
+// get the reader scripts from their own page and messages by runtime message instead.
+const bookTabs = new Set();
+const BOOK_PAGE = chrome.runtime.getURL('book.html');
+
+function sendToTab(tabId, msg) {
+  const sent = bookTabs.has(tabId)
+    ? chrome.runtime.sendMessage({ ...msg, tabId })
+    : chrome.tabs.sendMessage(tabId, msg);
+  return sent.catch(() => {}); // the tab may have closed, or nothing is listening
+}
+
+export async function startReading(tabId, mode = 'auto', bookPage = false) {
+  if (bookPage) {
+    bookTabs.add(tabId);
+    if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
+    activeTabId = tabId;
+    sendToTab(tabId, { event: 'start', mode });
+    return;
+  }
   try {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/Readability.js', 'lib/chunk-text.js', 'lib/align.js', 'content.js'] });
@@ -68,16 +87,19 @@ export async function startReading(tabId, mode = 'auto') {
   }
   if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
   activeTabId = tabId;
-  chrome.tabs.sendMessage(tabId, { event: 'start', mode });
+  sendToTab(tabId, { event: 'start', mode });
 }
 
-chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto'));
+chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto', tab.url?.startsWith(BOOK_PAGE)));
 chrome.commands.onCommand.addListener((command, tab) => { if (command === 'read' && tab) startReading(tab.id, 'auto'); });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'open-library') { chrome.tabs.create({ url: chrome.runtime.getURL('library.html') }); return; }
-  if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page');
+  if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page', tab.url?.startsWith(BOOK_PAGE));
 });
-chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });
+chrome.tabs.onRemoved.addListener((tabId) => {
+  bookTabs.delete(tabId);
+  if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; }
+});
 
 async function sendToPlayer(msg) {
   await ensureOffscreen();
@@ -101,12 +123,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.target === 'tab' && activeTabId !== null) {
-    chrome.tabs.sendMessage(activeTabId, msg).catch(() => {});
+    sendToTab(activeTabId, msg);
     return false;
   }
   if (msg.target === 'background' && msg.cmd === 'voices') {
     getVoices().then((voices) => sendResponse({ voices }), (e) => sendResponse({ error: e.message }));
     return true;
+  }
+  // The books page asks to read itself: it's a tab like any other, so the page reader applies
+  if (msg.target === 'background' && msg.cmd === 'read-tab' && sender.tab) {
+    startReading(sender.tab.id, 'page', true);
+    return false;
   }
   return false;
 });
