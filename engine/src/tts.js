@@ -126,3 +126,15 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
     ws.onclose = (ev) => { if (ev && ev.code !== 1000 && ev.code !== 1005 && !size) fail(new Error(`Closed (${ev.code}) ${ev.reason || ''}`)); };
   }));
 }
+
+/**
+ * List available voices. Needs the same headers as synthesis: pass { headers } in
+ * Node/Electron; in an extension the declarativeNetRequest rule supplies them.
+ * @returns {Promise<{ShortName:string, Locale:string, Gender:string, FriendlyName:string}[]>}
+ */
+export async function listVoices({ fetchImpl = globalThis.fetch, headers } = {}) {
+  const url = `${VOICES_URL}&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
+  const res = await fetchImpl(url, headers ? { headers } : undefined);
+  if (!res.ok) throw new Error(`Voice list failed: HTTP ${res.status}`);
+  return res.json();
+}
