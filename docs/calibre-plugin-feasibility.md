@@ -198,6 +198,7 @@ Option B adds roughly one more week for packaging and per-platform testing.
   audio path (WebSocket synthesis was not exercised live), and not the terms of service.
 - Runtime behaviour of `db.add_format` with MP3 and SRT in a real library (viewer, search,
   and metadata effects). The source below is verified; running it is not.
-- Build-time Python version function. Not found in `setup/__init__.py`, `setup/build_environment.py`,
-  or `bypy/linux/__main__.py`; `bypy/constants.py` and `bypy/__init__.py` do not exist at those paths.
-  The declared minimum (`>=3.14`) is the answer used in this study.
+- Build-time Python version. `bypy/macos/__main__.py` imports `python_major_minor_version` from
+  `bypy.constants` and derives `py_ver` from it, so the bundled version is computed at build
+  time, not hardcoded. The function body was not fetched: `bypy/constants.py` returned 404 on
+  master. The declared minimum (`>=3.14`) is the version this study uses.
