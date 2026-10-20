@@ -7,3 +7,6 @@ __pycache__/
 dist/
 build/
 .env
+node_modules/
+.wrangler/
+engine/examples/extension/engine/

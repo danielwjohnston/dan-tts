@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "dan-tts spike",
+  "version": "0.0.1",
+  "background": { "service_worker": "sw.js", "type": "module" },
+  "permissions": ["declarativeNetRequest"],
+  "host_permissions": ["https://speech.platform.bing.com/*", "wss://speech.platform.bing.com/*"],
+  "declarative_net_request": { "rule_resources": [{ "id": "edge", "enabled": true, "path": "rules.json" }] }
+}
