@@ -41,7 +41,10 @@ async function render() {
     let host = item.url;
     try {
       const u = new URL(item.url);
-      if (u.protocol === 'chrome-extension:') {
+      if (u.protocol === 'chrome-extension:' && u.pathname.endsWith('/book.html')) {
+        // Book chapters live on the extension's own pages; show where the book came from instead
+        host = 'archive.org';
+      } else if (u.protocol === 'chrome-extension:') {
         const inner = u.searchParams.get('url');
         host = inner ? `PDF · ${new URL(inner).hostname.replace(/^www\./, '') || 'file'}` : 'PDF (local file: choose it again to resume)';
       } else host = u.hostname.replace(/^www\./, '');
