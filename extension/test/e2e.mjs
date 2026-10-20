@@ -19,7 +19,12 @@ const manifest = JSON.parse(readFileSync(join(ext, 'manifest.json')));
 manifest.host_permissions.push('http://127.0.0.1/*');
 writeFileSync(join(ext, 'manifest.json'), JSON.stringify(manifest));
 
-const server = createServer((req, res) => { res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', 'article.html'))); }).listen(0);
+const pdfs = {}; // filled after launch: generated with Chromium so no binaries live in the repo
+const server = createServer((req, res) => {
+  const name = req.url.slice(1);
+  if (pdfs[name]) { res.setHeader('Content-Type', 'application/pdf'); res.end(pdfs[name]); return; }
+  res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', 'article.html')));
+}).listen(0);
 const origin = `http://127.0.0.1:${server.address().port}`;
 
 const results = [];
@@ -33,7 +38,13 @@ const ctx = await chromium.launchPersistentContext('', {
     ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`, '--proxy-bypass-list=127.0.0.1;localhost'] : [])],
 });
 try {
-  let [sw] = ctx.serviceWorkers(); if (!sw) sw = await ctx.waitForEvent('serviceworker');
+  let [first] = ctx.serviceWorkers(); if (!first) first = await ctx.waitForEvent('serviceworker');
+  const extId = new URL(first.url()).host;
+  // MV3 workers stop when idle and restart on demand, and other components (the PDF
+  // viewer) have workers too, so always look ours up fresh
+  const worker = async () => ctx.serviceWorkers().find((w) => w.url().startsWith(`chrome-extension://${extId}/`))
+    || (await ctx.waitForEvent('serviceworker', { predicate: (w) => w.url().startsWith(`chrome-extension://${extId}/`) }));
+  const sw = { evaluate: async (fn, arg) => (await worker()).evaluate(fn, arg) };
   const page = await ctx.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
@@ -110,7 +121,6 @@ try {
   check('⟲ starts over from the beginning', true, (await activeWord())?.join(' '));
 
   // 6c. Library lists the page with its progress
-  const extId = new URL(sw.url()).host;
   const lib = await ctx.newPage();
   await lib.goto(`chrome-extension://${extId}/library.html`);
   await lib.waitForSelector('#list li', { timeout: 5000 });
@@ -143,6 +153,66 @@ try {
     setTimeout(() => res('timeout'), 10000);
   }), connectionUrl());
   check('websites cannot borrow the header rule', siteAttempt === 'refused', siteAttempt);
+
+  // 9. PDFs: a PDF tab opens in dan-tts' reader with headers/page numbers stripped
+  const maker = await ctx.newPage();
+  const para = (n) => '<p>' + ('Paragraph ' + n + ' begins here. ' + 'The library on Elm Street had tall windows and creaking floors, and nobody was ever in a hurry there. ').repeat(4) + 'It ended with a hyphen&shy;ated word.</p>';
+  await maker.setContent('<html><body style="font: 12pt Georgia; width: 5.5in"><h1 style="font-size:24pt">The Quiet Library</h1>' + Array.from({ length: 12 }, (_, i) => para(i + 1)).join('') + '</body></html>');
+  pdfs['book.pdf'] = await maker.pdf({ format: 'Letter', displayHeaderFooter: true, margin: { top: '1in', bottom: '1in' },
+    headerTemplate: '<div style="font-size:9px;width:100%;text-align:center">The Quiet Library — A Novel</div>',
+    footerTemplate: '<div style="font-size:9px;width:100%;text-align:center"><span class="pageNumber"></span></div>' });
+  await maker.setContent('<html><body><svg width="600" height="800"><rect width="600" height="800" fill="#eee"/><circle cx="300" cy="300" r="120" fill="#888"/></svg></body></html>');
+  pdfs['scan.pdf'] = await maker.pdf({ format: 'Letter' });
+  await maker.close();
+
+  const pdfTab = await ctx.newPage();
+  await pdfTab.goto(`${origin}/book.pdf`).catch(() => {}); // the viewer may not "load" like a page
+  const readerPromise = ctx.waitForEvent('page', { predicate: (p) => p.url().includes('pdf-reader.html'), timeout: 15000 });
+  await sw.evaluate(async ({ origin }) => {
+    const [t] = await chrome.tabs.query({ url: `${origin}/book.pdf` });
+    await startReading(t.id, 'auto');
+  }, { origin });
+  const reader = await readerPromise;
+  const readerErrors = [];
+  reader.on('pageerror', (e) => readerErrors.push(e.message));
+  if (process.env.DEBUG) {
+    reader.on('console', (m) => console.log('reader console:', m.type(), m.text().slice(0, 200)));
+    setTimeout(async () => console.log('reader status:', await reader.textContent('#status').catch((e) => e.message), '| bar:', await reader.evaluate(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.status')?.textContent).catch((e) => e.message)), 8000);
+  }
+  await reader.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 60000 });
+  const pdfText = await reader.evaluate(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.article').innerText);
+  check('PDF tab opens in the dan-tts reader and plays', reader.url().includes(encodeURIComponent(`${origin}/book.pdf`)));
+  check('PDF headers and page numbers are stripped', pdfText.startsWith('The Quiet Library') && !/A Novel/.test(pdfText) && !/^\s*\d+\s*$/m.test(pdfText));
+  const pdfParas = await reader.evaluate(() => [...document.querySelector('dan-tts-root').shadowRoot.querySelectorAll('.article p')].map((p) => p.textContent));
+  check('PDF paragraphs rebuilt, hyphenation rejoined', pdfParas.length === 12 && pdfParas.every((t, i) => t.startsWith(`Paragraph ${i + 1} begins`) && t.endsWith('It ended with a hyphenated word.')),
+    `${pdfParas.length} paragraphs; last ends "${(pdfParas.at(-1) || '').slice(-40)}"`);
+  check('no errors in the PDF reader', readerErrors.length === 0, readerErrors.join('; '));
+  await reader.keyboard.press('Escape');
+
+  // Local file picker
+  const local = await ctx.newPage();
+  await local.goto(`chrome-extension://${extId}/pdf-reader.html`);
+  const tmpPdf = join(ext, 'local-test.pdf');
+  writeFileSync(tmpPdf, pdfs['book.pdf']);
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.overlay.open'), null, { timeout: 30000 });
+  check('local PDF files open from the picker', /12 paragraphs|13 paragraphs/.test(await local.textContent('#status')), await local.textContent('#status'));
+  await local.keyboard.press('Escape');
+
+  // Scanned (image-only) PDF gets a clear message instead of silence
+  writeFileSync(tmpPdf, pdfs['scan.pdf']);
+  await local.reload();
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => /scanned/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('scanned PDFs explain why they can’t be read', true);
+  await local.close();
+
+  const lib2 = await ctx.newPage();
+  await lib2.goto(`chrome-extension://${extId}/library.html`);
+  await lib2.waitForSelector('#list li');
+  const lib2Text = (await lib2.textContent('#list')).replace(/\s+/g, ' ');
+  check('library lists PDFs (web and local)', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text), lib2Text.slice(0, 160));
+  await lib2.close();
 
   check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
 } finally {
