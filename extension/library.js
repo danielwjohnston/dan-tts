@@ -39,7 +39,13 @@ async function render() {
     const meta = document.createElement('div');
     meta.className = 'meta';
     let host = item.url;
-    try { host = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
+    try {
+      const u = new URL(item.url);
+      if (u.protocol === 'chrome-extension:') {
+        const inner = u.searchParams.get('url');
+        host = inner ? `PDF · ${new URL(inner).hostname.replace(/^www\./, '') || 'file'}` : 'PDF (local file: choose it again to resume)';
+      } else host = u.hostname.replace(/^www\./, '');
+    } catch {}
     meta.textContent = `${host} · ${item.done ? 'Finished' : `${pct}% · paragraph ${(item.chunk || 0) + 1} of ${item.total || '?'}`} · ${ago(item.updatedAt)}`;
     const remove = document.createElement('button');
     remove.className = 'remove';

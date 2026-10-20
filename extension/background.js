@@ -35,6 +35,7 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: 'read-selection', title: 'Read selection aloud', contexts: ['selection'] });
     chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
     chrome.contextMenus.create({ id: 'open-library', title: 'Open library', contexts: ['action'] });
+    chrome.contextMenus.create({ id: 'open-pdf', title: 'Read a PDF file…', contexts: ['action'] });
   });
 });
 chrome.runtime.onStartup.addListener(installHeaderRule);
@@ -54,8 +55,18 @@ async function ensureOffscreen() {
 
 // ---- Start reading in a tab ----
 let activeTabId = null;
+let activeIsExtensionPage = false; // the PDF reader page hears the player directly
+
+const READER_URL = chrome.runtime.getURL('pdf-reader.html');
+const isPdfUrl = (url) => /^(https?|file):/.test(url || '') && /\.pdf($|[?#])/i.test(url);
 
 export async function startReading(tabId, mode = 'auto') {
+  // The browser's PDF viewer can't be scripted: open the PDF in dan-tts' own reader instead
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (tab && isPdfUrl(tab.url)) {
+    chrome.tabs.create({ url: `${READER_URL}?url=${encodeURIComponent(tab.url)}`, index: tab.index + 1 });
+    return;
+  }
   try {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/Readability.js', 'lib/chunk-text.js', 'lib/align.js', 'content.js'] });
@@ -68,6 +79,7 @@ export async function startReading(tabId, mode = 'auto') {
   }
   if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
   activeTabId = tabId;
+  activeIsExtensionPage = false;
   chrome.tabs.sendMessage(tabId, { event: 'start', mode });
 }
 
@@ -75,6 +87,7 @@ chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto'));
 chrome.commands.onCommand.addListener((command, tab) => { if (command === 'read' && tab) startReading(tab.id, 'auto'); });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'open-library') { chrome.tabs.create({ url: chrome.runtime.getURL('library.html') }); return; }
+  if (info.menuItemId === 'open-pdf') { chrome.tabs.create({ url: READER_URL }); return; }
   if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page');
 });
 chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });
@@ -97,10 +110,11 @@ async function getVoices() {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target === 'player' && sender.tab) {
     activeTabId = sender.tab.id;
+    activeIsExtensionPage = (sender.url || '').startsWith(chrome.runtime.getURL(''));
     sendToPlayer(msg).then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
   }
-  if (msg.target === 'tab' && activeTabId !== null) {
+  if (msg.target === 'tab' && activeTabId !== null && !activeIsExtensionPage) {
     chrome.tabs.sendMessage(activeTabId, msg).catch(() => {});
     return false;
   }

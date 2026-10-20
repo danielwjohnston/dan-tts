@@ -102,6 +102,8 @@
   const BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,figcaption,dt,dd,td,th';
 
   function pageParagraphs() {
+    // The PDF reader page hands over paragraphs it already extracted
+    if (window.__danTtsDoc) return window.__danTtsDoc;
     let title = document.title, byline = '', blocks = [];
     try {
       const parsed = new Readability(document.cloneNode(true)).parse();
@@ -208,8 +210,9 @@
   addEventListener('wheel', () => { if (mode === 'selection') userScrolledAt = Date.now(); }, { passive: true });
 
   // ---- Progress (resume + library), page mode only ----
-  const pageUrl = location.origin + location.pathname + location.search;
-  const progressKey = 'progress:' + pageUrl;
+  // The PDF reader sets __danTtsDocUrl/__danTtsDocId so each PDF gets its own entry
+  const pageUrl = () => window.__danTtsDocUrl || location.origin + location.pathname + location.search;
+  const progressKey = () => 'progress:' + (window.__danTtsDocId || pageUrl());
   let fingerprint = '';
   let lastSave = 0;
   let resumedNote = false;
@@ -219,7 +222,7 @@
   function saveProgress(fields) {
     if (mode !== 'page') return;
     const title = tokens.length ? article.querySelector('h1')?.textContent || document.title : document.title;
-    chrome.storage.local.set({ [progressKey]: { url: pageUrl, title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
+    chrome.storage.local.set({ [progressKey()]: { url: pageUrl(), title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
   }
 
   // ---- Start / controls ----
@@ -247,7 +250,8 @@
     resumedNote = false;
     if (mode === 'page') {
       fingerprint = `${chunks.length}:${hash(chunks.slice(0, 3).join('|').slice(0, 4000))}`;
-      const saved = (await chrome.storage.local.get(progressKey))[progressKey];
+      const key = progressKey();
+      const saved = (await chrome.storage.local.get(key))[key];
       if (saved && saved.fp === fingerprint && !saved.done && (saved.chunk > 0 || saved.ticks > 2e7) && saved.chunk < chunks.length) {
         startChunk = saved.chunk;
         startTicks = Math.max(0, saved.ticks - 1e7); // back up a second for context
@@ -319,6 +323,8 @@
     else if (mode === 'page' && e.key === 'ArrowRight') { $('.next').click(); e.preventDefault(); }
     else if (mode === 'page' && e.key === 'ArrowLeft') { $('.prev').click(); e.preventDefault(); }
   }, true);
+
+  window.__danTtsStart = start; // used by the PDF reader page
 
   // ---- Messages from the player (via the background worker) ----
   chrome.runtime.onMessage.addListener((msg) => {

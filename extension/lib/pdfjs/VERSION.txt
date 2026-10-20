@@ -1,0 +1,1 @@
+pdfjs-dist 6.4.299 (Mozilla, Apache-2.0): legacy/build/pdf.min.mjs and legacy/build/pdf.worker.min.mjs, unmodified. The legacy build is used because the modern one needs very new JS features (e.g. Map.getOrInsertComputed).
