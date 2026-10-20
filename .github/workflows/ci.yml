@@ -23,3 +23,5 @@ jobs:
       - run: node --test tests/chunk-text.test.js
       - run: npm test
         working-directory: engine
+      - run: node --test extension/test/align.test.js
+      - run: node scripts/sync-extension.mjs --check

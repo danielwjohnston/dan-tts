@@ -1,0 +1,2 @@
+/* In-place word highlight for "Read selection" (CSS Custom Highlight API: no DOM changes) */
+::highlight(dan-tts-word) { background-color: #fde68a; color: #1d1d1f; }

@@ -54,3 +54,13 @@ test('strips control characters the service rejects', async () => {
 test('48 kbps CBR byte-to-tick conversion', () => {
   assert.strictEqual(mp3BytesToTicks(6000), 10_000_000); // 6000 bytes = 1 second
 });
+
+test('listVoices sends the token and returns the JSON list', async () => {
+  let called;
+  const fetchImpl = async (url, init) => { called = { url, init }; return { ok: true, json: async () => [{ ShortName: 'en-US-AriaNeural' }] }; };
+  const { listVoices } = await import('../src/tts.js');
+  const voices = await listVoices({ fetchImpl, headers: { Origin: 'x' } });
+  assert.deepStrictEqual(voices, [{ ShortName: 'en-US-AriaNeural' }]);
+  assert.match(called.url, /voices\/list\?trustedclienttoken=.*&Sec-MS-GEC=[0-9A-F]{16}-[0-9A-F]{64}/);
+  assert.deepStrictEqual(called.init, { headers: { Origin: 'x' } });
+});

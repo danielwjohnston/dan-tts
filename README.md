@@ -1,5 +1,7 @@
 # Dan's TTS Project
 
+> **Browser extension:** read any page aloud with word highlighting, no server needed. See [`extension/`](extension/).
+
 Minimal text-to-speech microservice using Microsoft Edge online voices (no API key).
 Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 
