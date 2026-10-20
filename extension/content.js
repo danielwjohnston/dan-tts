@@ -142,16 +142,20 @@
         parent.appendChild(span);
       });
     };
-    const h1 = document.createElement('h1');
-    addWords(h1, title);
-    article.appendChild(h1);
+    // A title that's just the opening words (pasted text) would be read twice: don't speak it
+    const speakTitle = !window.__danTtsDoc?.hideTitle;
+    if (speakTitle) {
+      const h1 = document.createElement('h1');
+      addWords(h1, title);
+      article.appendChild(h1);
+    }
     if (byline) { const b = document.createElement('div'); b.className = 'byline'; b.textContent = byline; article.appendChild(b); }
     for (const block of blocks) {
       const el = document.createElement(block.tag === 'h' ? 'h2' : 'p');
       addWords(el, block.text);
       article.appendChild(el);
     }
-    return [title, ...blocks.map((b) => b.text)].join('\n\n');
+    return [...(speakTitle ? [title] : []), ...blocks.map((b) => b.text)].join('\n\n');
   }
 
   function buildSelection(sel) {
@@ -222,7 +226,7 @@
 
   function saveProgress(fields) {
     if (mode !== 'page') return;
-    const title = tokens.length ? article.querySelector('h1')?.textContent || document.title : document.title;
+    const title = window.__danTtsDoc?.title || article.querySelector('h1')?.textContent || document.title;
     chrome.storage.local.set({ [progressKey()]: { url: pageUrl(), title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
   }
 

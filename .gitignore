@@ -11,3 +11,7 @@ node_modules/
 .wrangler/
 engine/examples/extension/engine/
 _site/
+desktop/app/
+desktop/node_modules/
+desktop/out/
+!desktop/build/
