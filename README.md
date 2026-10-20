@@ -13,7 +13,8 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 - **Paragraph chunking** — long text is split into paragraphs and generated in sequence with a progress bar; highlighting stays in sync across the whole text
 - **Auto-scroll pause** — scroll freely during playback without rubber-banding
 - **URL text extraction** — paste a URL, load page text for read-aloud
-- **Export** — JSON bundle (audio + timing), WebVTT and SRT captions, standalone player embed code
+- **Export** — JSON bundle (audio + timing), WebVTT and SRT captions, a **standalone HTML file** (audio + highlighting player in one file that opens anywhere), or player embed code
+- **Batch** — several texts separated by `---` lines become one zip of MP3s with SRT captions
 - **Standalone player** (`static/tts-player.js`) — drop on any site for highlighting playback
 - **Voice preview** — pre-rendered samples, gender filter tabs, favorites (localStorage)
 - **Dark mode**, smart filenames, download, history, Ctrl+Enter shortcut
@@ -88,7 +89,7 @@ Free services sleep after ~15 minutes idle; the first request afterwards takes ~
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q
-node --test tests/chunk-text.test.js   # text chunker
+node --test tests/chunk-text.test.js tests/bundle.test.js   # chunker, zip/SRT
 ```
 
 Edge TTS and outbound HTTP are stubbed, so the suites run offline. CI runs it on every PR.

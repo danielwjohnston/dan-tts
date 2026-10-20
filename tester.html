@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="static/themes.css" />
   <script src="static/theme.js"></script>
   <script src="static/chunk-text.js"></script>
+  <script src="static/bundle.js"></script>
   <style>
     :root {
       --bg: #ffffff; --bg2: #f7f7f8; --fg: #111; --fg2: #555; --border: #e2e2e2;
@@ -175,6 +176,7 @@
             <button class="export-option" data-format="json">JSON Bundle</button>
             <button class="export-option" data-format="webvtt">WebVTT Captions</button>
             <button class="export-option" data-format="srt">SRT Captions</button>
+            <button class="export-option" data-format="html">Standalone HTML</button>
             <button class="export-option" data-format="player">Player Code</button>
           </div>
         </div>
@@ -190,6 +192,15 @@
       <div class="advanced-content" id="adv-content">
         <label>API Base URL</label>
         <input id="api" type="text" value="https://dan-tts.onrender.com" />
+      </div>
+
+      <span class="advanced-toggle" id="batch-toggle">Batch &darr;</span>
+      <div class="advanced-content" id="batch-content">
+        <label for="batch-text">Batch: one item per block, separated by a line with only <code>---</code></label>
+        <textarea id="batch-text" rows="6" placeholder="Chapter one text...&#10;---&#10;Chapter two text..."></textarea>
+        <div class="text-meta"><span id="batch-count">0 items</span><span>Uses the voice above; each item gets an MP3 and SRT captions</span></div>
+        <div class="btn-row"><button class="btn btn-secondary" id="batch-go">Synthesize all &amp; download zip</button></div>
+        <div class="log" id="batch-log"></div>
       </div>
 
       <!-- Word highlight display -->
@@ -257,6 +268,108 @@
       advContent.classList.toggle('open');
       advToggle.innerHTML = advContent.classList.contains('open') ? 'Advanced &uarr;' : 'Advanced &darr;';
     };
+
+    /* ---- Batch: several texts → one zip of MP3s + SRT captions ---- */
+    const batchToggle = document.getElementById('batch-toggle');
+    const batchContent = document.getElementById('batch-content');
+    const batchText = document.getElementById('batch-text');
+    const batchCount = document.getElementById('batch-count');
+    const batchGo = document.getElementById('batch-go');
+    const batchLog = document.getElementById('batch-log');
+    batchToggle.onclick = () => {
+      batchContent.classList.toggle('open');
+      batchToggle.innerHTML = batchContent.classList.contains('open') ? 'Batch &uarr;' : 'Batch &darr;';
+    };
+    batchText.oninput = () => {
+      const n = ttsBundle.splitBatch(batchText.value).length;
+      batchCount.textContent = `${n} item${n === 1 ? '' : 's'}`;
+    };
+    batchGo.onclick = async () => {
+      if (isSynthesizing) return;
+      const items = ttsBundle.splitBatch(batchText.value);
+      if (!items.length) { batchLog.textContent = 'Add some text first.'; return; }
+      const voice = voiceSelect.value || 'en-US-AriaNeural';
+      const format = document.getElementById('format').value;
+      setLoading(true);
+      batchGo.disabled = true;
+      const files = [];
+      const failed = [];
+      try {
+        for (let i = 0; i < items.length; i++) {
+          batchLog.textContent = `Item ${i + 1} of ${items.length}...`;
+          setProgress(i / items.length);
+          try {
+            const { blob, boundaries, outFormat } = await synthesizeText(items[i], voice, format);
+            const base = `${String(i + 1).padStart(2, '0')}-${smartFilename(items[i], voice, '').replace(/\.$/, '')}`;
+            files.push({ name: `${base}.${outFormat}`, data: new Uint8Array(await blob.arrayBuffer()) });
+            if (boundaries.length) files.push({ name: `${base}.srt`, data: ttsBundle.boundariesToSrt(boundaries) });
+          } catch (err) {
+            console.error(err);
+            failed.push(`${i + 1} (${err.message})`);
+          }
+        }
+        setProgress(1);
+        if (files.length) {
+          const zip = new Blob([ttsBundle.makeZip(files)], { type: 'application/zip' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(zip);
+          a.download = `dan-tts-batch-${new Date().toISOString().slice(0, 10)}.zip`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        }
+        const done = items.length - failed.length;
+        const bytes = files.reduce((n, f) => n + (f.data.length || 0), 0);
+        const size = bytes < 1048576 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+        batchLog.textContent = `Done: ${done} of ${items.length} items` + (files.length ? ` (${size} zip).` : '.') +
+          (failed.length ? ` Failed: ${failed.join(', ')}` : '');
+      } finally {
+        batchGo.disabled = false;
+        setLoading(false);
+      }
+    };
+
+    /* Self-contained HTML: audio, timings and the player inlined into one file */
+    async function exportStandaloneHtml() {
+      const audioB64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1]);
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(lastBlob);
+      });
+      const playerJs = await (await fetch('static/tts-player.js')).text();
+      const last = wordBoundaries[wordBoundaries.length - 1];
+      const data = {
+        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg',
+        boundaries: wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text })),
+        metadata: { words: wordBoundaries.length, duration_ms: last ? Math.round((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString() },
+      };
+      // Keep inlined code and data from closing the <script> element early
+      // (Built from pieces: a literal "<!--" or "<script" inside this inline script would
+      // switch the HTML parser into escaped mode and swallow the rest of the page.)
+      const safe = (str) => str.replace(/<\/(script)/gi, '<\\/$1').replace(new RegExp('<' + '!--', 'g'), '<\\!--');
+      const tag = (t) => `<${t}>`;
+      const title = lastText.trim().split(/\s+/).slice(0, 8).join(' ').replace(/[<>&"]/g, '');
+      const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${title}</title>
+<style>
+  :root { --bg: #fff; --bg2: #f7f7f8; --fg: #111; --fg2: #666; --border: #e2e2e2; --highlight: #fef08a; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --bg2: #1c1c1e; --fg: #eee; --fg2: #999; --border: #333; --highlight: #854d0e; } }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, sans-serif; }
+  .tts-highlight { max-height: none !important; }
+</style></head>
+<body><div id="tts-player"></div>
+${tag('script')}${safe(playerJs)}<\/script>
+${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.stringify(data))} });<\/script>
+</body></html>`;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+      a.download = smartFilename(lastText, lastVoice, 'html');
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      const kb = Math.ceil(html.length / 1024);
+      logEl.textContent = `Exported standalone HTML (${kb < 1024 ? kb + ' KB' : (kb / 1024).toFixed(1) + ' MB'}): open it anywhere, no server or files needed.`;
+    }
 
     /* ---- Text count + auto-resize ---- */
     function updateCount() {
@@ -535,25 +648,27 @@
       return new Blob([arr], { type: contentType });
     }
 
+    /* Text → audio + word timings. Long text is chunked (and always MP3, since only MP3 concatenates). */
+    async function synthesizeText(text, voice, format) {
+      const chunks = chunkText(text);
+      if (chunks.length > 1) {
+        const { blob, boundaries } = await synthesizeChunked(chunks, voice);
+        return { blob, boundaries, outFormat: 'mp3', chunks };
+      }
+      const data = await doSynthesizeWithTiming(text, voice, format);
+      return { blob: b64toBlob(data.audio, data.contentType), boundaries: data.boundaries || [], outFormat: format, chunks };
+    }
+
     btn.onclick = async () => {
       if (isSynthesizing) return;
       const text = textArea.value;
       if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const voice = voiceSelect.value || 'en-US-AriaNeural';
       const format = document.getElementById('format').value;
-      const chunks = chunkText(text);
       setLoading(true);
       logEl.textContent = 'Requesting...';
       try {
-        let blob, boundaries, outFormat = format;
-        if (chunks.length > 1) {
-          ({ blob, boundaries } = await synthesizeChunked(chunks, voice));
-          outFormat = 'mp3';
-        } else {
-          const data = await doSynthesizeWithTiming(text, voice, format);
-          blob = b64toBlob(data.audio, data.contentType);
-          boundaries = data.boundaries || [];
-        }
+        const { blob, boundaries, outFormat, chunks } = await synthesizeText(text, voice, format);
         lastBlob = blob; lastExt = outFormat; lastText = text; lastVoice = voice;
         downloadBtn.disabled = false;
         playerEl.src = URL.createObjectURL(blob);
@@ -619,6 +734,11 @@
           return;
         }
         
+        if (format === 'html') {
+          try { await exportStandaloneHtml(); } catch (err) { console.error(err); logEl.textContent = 'Export error: ' + err.message; }
+          return;
+        }
+
         if (format === 'player') {
           // Show embed code modal
           const dataJson = JSON.stringify({
