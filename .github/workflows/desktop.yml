@@ -25,6 +25,8 @@ jobs:
         working-directory: desktop
       - run: npm install --no-save playwright@1.56.1
         working-directory: desktop
+      # Ubuntu 24.04 restricts unprivileged user namespaces, which Electron's sandbox needs
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: xvfb-run -a npm test
         working-directory: desktop
 
