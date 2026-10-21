@@ -117,8 +117,11 @@ try {
   await win.waitForSelector('#chapters li', { timeout: 30000 });
   check('EPUB file from disk opens as a book', /book\.html\?file=/.test(win.url()) && (await win.locator('#chapters li').count()) === 2, win.url());
 
-  await win.goto('app://reader/book.html?id=aristotlesmetaph0001aris');
-  await win.waitForSelector('#chapters li', { timeout: 120000 }).catch(() => {});
+  // Live archive.org: one retry, since its servers sometimes time out from CI machines
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await win.goto('app://reader/book.html?id=aristotlesmetaph0001aris');
+    if (await win.waitForSelector('#chapters li', { timeout: 120000 }).then(() => true, () => false)) break;
+  }
   const aristotle = await win.locator('#chapters li').count();
   check('archive.org book opens (Aristotle\'s Metaphysics)', aristotle > 50, `${aristotle} chapters; ${await win.textContent('#toc-status')}`);
 
