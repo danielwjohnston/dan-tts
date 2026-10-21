@@ -10,7 +10,7 @@ A desktop app for Windows, macOS and Linux that reads **web pages, PDFs (includi
 
 ## Install
 
-1. On GitHub, open **Actions** → **Desktop app** → the latest green run → **Artifacts**, and download the one for your system:
+1. On GitHub, open **Releases** (right side of the repo page) and download the file for your system from the latest **dan-tts Reader** release. Between releases, the newest builds are under **Actions** → **Desktop app** → the latest green run → **Artifacts** (kept for 30 days):
    - **Windows:** `dan-tts-reader-Windows`. It has an installer (`dan-tts Reader Setup 0.1.0.exe`) and a portable `.exe` that runs without installing.
    - **macOS:** `dan-tts-reader-macOS`, a `.dmg`.
    - **Linux:** `dan-tts-reader-Linux`, an `.AppImage`. Run `chmod +x` on it, then run it.
@@ -18,6 +18,12 @@ A desktop app for Windows, macOS and Linux that reads **web pages, PDFs (includi
    - **Windows SmartScreen:** click **More info** → **Run anyway**.
    - **macOS:** right-click the app → **Open** → **Open**. Or allow it under **System Settings → Privacy & Security**.
 3. **Use a personal computer, not a work-managed one.** Security tools like CrowdStrike can flag or block unsigned apps that download content and make network connections, and you don't want a security alert on a work machine.
+
+## Publish a release
+
+1. Bump `"version"` in `desktop/package.json` and merge it.
+2. Tag that commit and push the tag: `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0` (the tag must match the version).
+3. The **Desktop app** workflow tests, builds all three systems, and publishes a GitHub Release with the installers attached.
 
 ## Run from source
 
@@ -47,4 +53,4 @@ The test drives the real app window against the live voice service (16 checks). 
 
 ## Known limitations
 - Builds are unsigned, so you'll see the first-run warning above.
-- No auto-update yet: download a newer build from Actions to update.
+- No auto-update yet: download the newest release to update.

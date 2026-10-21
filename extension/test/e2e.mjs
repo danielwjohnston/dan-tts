@@ -33,6 +33,9 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
 
 const ctx = await chromium.launchPersistentContext('', {
   executablePath: process.env.CHROMIUM_PATH || undefined,
+  // Extensions need full Chromium: Playwright's default headless browser (headless shell)
+  // can't load them, and the test would time out waiting for the service worker
+  channel: process.env.CHROMIUM_PATH ? undefined : 'chromium',
   headless: true,
   args: ['--headless=new', `--disable-extensions-except=${ext}`, `--load-extension=${ext}`, '--autoplay-policy=no-user-gesture-required',
     // Behind an HTTPS proxy (CI sandboxes), keep the local fixture server off the proxy
