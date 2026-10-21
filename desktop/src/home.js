@@ -4,13 +4,15 @@ import { handOff, saveDoc, deleteDoc } from './store.js';
 const $ = (id) => document.getElementById(id);
 const status = (text, error = false) => { $('status').textContent = text; $('status').classList.toggle('error', error); };
 const isPdf = (name) => /\.pdf($|[?#])/i.test(name);
+const isEpub = (name) => /\.epub($|[?#])/i.test(name);
 
 // ---- Links ----
 $('url-form').addEventListener('submit', (e) => {
   e.preventDefault();
   let url = $('url').value.trim();
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  location.href = isPdf(url) ? `pdf-reader.html?url=${encodeURIComponent(url)}` : `reader.html?url=${encodeURIComponent(url)}`;
+  const page = isPdf(url) ? 'pdf-reader.html' : isEpub(url) ? 'book.html' : 'reader.html';
+  location.href = `${page}?url=${encodeURIComponent(url)}`;
 });
 
 // ---- Files ----
@@ -18,6 +20,13 @@ async function openFile(file) {
   try {
     if (file.type === 'application/pdf' || isPdf(file.name)) {
       location.href = `pdf-reader.html?handoff=${await handOff(file)}`;
+      return;
+    }
+    if (file.type === 'application/epub+zip' || isEpub(file.name)) {
+      const [{ readEpub }, { saveBookFile }] = await Promise.all([import('./lib/epub.js'), import('./lib/book-files.js')]);
+      const data = await file.arrayBuffer();
+      await readEpub(data); // a clear error here rather than on the book page
+      location.href = `book.html?file=${await saveBookFile(file.name, data)}`;
       return;
     }
     if (file.size > 20 * 1024 * 1024) throw new Error('That file is over 20 MB');
@@ -58,6 +67,7 @@ function describe(url) {
     const u = new URL(url);
     if (u.protocol === 'app:') {
       const inner = u.searchParams.get('url');
+      if (u.pathname.endsWith('/book.html')) return 'Book';
       if (u.pathname.endsWith('/pdf-reader.html')) return inner ? `PDF · ${new URL(inner).hostname}` : 'PDF on this computer (choose it again to resume)';
       if (inner) return new URL(inner).hostname.replace(/^www\./, '');
       return 'Saved text';

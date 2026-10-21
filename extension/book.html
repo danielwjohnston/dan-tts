@@ -23,6 +23,7 @@
     li a:hover { color: var(--accent); }
     .status { margin: 16px 0; color: var(--muted); }
     .status.error { color: #e5484d; }
+    .status button { margin-left: 8px; padding: 6px 12px; }
     .nav { display: flex; justify-content: space-between; gap: 8px; margin: 32px 0; flex-wrap: wrap; align-items: center; }
     article { font-size: 19px; line-height: 1.7; }
     article h2 { font-size: 24px; margin: 24px 0 16px; }
@@ -36,11 +37,12 @@
   <main>
     <section id="search-view">
       <h1>Books from archive.org</h1>
-      <p class="hint">Free public-domain and open books. Pick one, then read it chapter by chapter with the dan-tts reader. Books with DRM can't be opened.</p>
+      <p class="hint">Free public-domain and open books. Pick one, then read it chapter by chapter with the dan-tts reader. You can also paste a link to any EPUB, or open one from your computer. Books with DRM can't be opened.</p>
       <form id="search-form">
-        <input id="q" type="search" placeholder="Title, author or subject" aria-label="Search books" required>
+        <input id="q" type="search" placeholder="Title, author or subject, or an EPUB link" aria-label="Search books, or paste an EPUB link" required>
         <button type="submit">Search</button>
       </form>
+      <p><button id="pick" type="button" class="ghost">Open an EPUB file…</button><input id="file" type="file" accept=".epub,application/epub+zip" hidden></p>
       <p id="search-status" class="status" hidden></p>
       <ul id="results"></ul>
     </section>

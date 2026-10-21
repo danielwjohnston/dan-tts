@@ -33,3 +33,20 @@ jobs:
           name: dan-tts-firefox
           path: dist/firefox/
           retention-days: 30
+
+  # The extension in real browsers against the live voice service: Chromium (Playwright) and
+  # Firefox (WebDriver BiDi via puppeteer-core). The runner image already has Firefox.
+  extension-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: |
+          npm install --no-save --prefix "$RUNNER_TEMP/e2e" playwright@1.56.1 puppeteer-core@25.14.0
+          "$RUNNER_TEMP/e2e/node_modules/.bin/playwright" install --with-deps chromium
+          echo "PLAYWRIGHT_MODULE=$RUNNER_TEMP/e2e/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
+          echo "PUPPETEER_MODULE=$RUNNER_TEMP/e2e/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js" >> "$GITHUB_ENV"
+      - run: node extension/test/e2e.mjs
+      - run: FIREFOX_PATH="$(readlink -f "$(command -v firefox)")" node extension/test/e2e-firefox.mjs
