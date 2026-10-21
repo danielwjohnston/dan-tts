@@ -9,8 +9,10 @@ from calibre_plugins.dan_tts.config import prefs
 from calibre_plugins.dan_tts.dan_tts_core import SUPPORTED_FORMATS, extract_text, make_audiobook
 
 
-def run_book(server_url, voice, source_path, source_format):
-    """Runs in a worker thread. Returns the paths of the MP3 and SRT files it wrote."""
+def run_book(server_url, voice, source_path, source_format, **calibre_job_kwargs):
+    """Runs in a worker thread. Returns the paths of the MP3 and SRT files it wrote.
+
+    Calibre adds its own keyword arguments (such as `notifications` and `abort`); they are unused here."""
     text = extract_text(source_path, source_format)
     mp3_bytes, srt_text = make_audiobook(server_url, text, voice)
     workdir = tempfile.mkdtemp(prefix="dan-tts-")
