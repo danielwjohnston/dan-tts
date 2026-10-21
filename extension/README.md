@@ -33,6 +33,7 @@ Firefox uses its own build of the same code:
 |---|---|
 | Read the whole page | Click the toolbar icon, press **Alt+Shift+R**, or right-click the page → **Read this page aloud** |
 | Read part of a page | Select text, then press **Alt+Shift+R** or right-click → **Read selection aloud** |
+| Send to the web app | Right-click the page or a selection → **Send to Dan's TTS web app** to open it in the full app (batch, export, downloads). Sends your selection, or the whole page. |
 | Read a PDF | Press **Alt+Shift+R** (or click the icon) while viewing a PDF online. For a PDF on your computer, right-click the toolbar icon → **Read a PDF file…** and drop it in. |
 
 **Reading a page** opens a clean, distraction-free view of the article (menus, ads and sidebars are removed). It highlights each word and scrolls along with the reading.

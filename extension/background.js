@@ -37,6 +37,7 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: 'read-page', title: 'Read this page aloud', contexts: ['page'] });
     chrome.contextMenus.create({ id: 'open-library', title: 'Open library', contexts: ['action'] });
     chrome.contextMenus.create({ id: 'open-pdf', title: 'Read a PDF file…', contexts: ['action'] });
+    chrome.contextMenus.create({ id: 'send-to-web', title: "Send to Dan's TTS web app", contexts: ['selection', 'page'] });
   });
 });
 chrome.runtime.onStartup.addListener(installHeaderRule);
@@ -59,6 +60,25 @@ let activeTabId = null;
 let activeIsExtensionPage = false; // the PDF reader page hears the player directly
 
 const READER_URL = chrome.runtime.getURL('pdf-reader.html');
+// Same hand-off as the web app's bookmarklet: text travels in the #fragment, which never reaches the server
+const WEB_APP_URL = 'https://dan-tts.macdaddydwj.workers.dev/tester';
+const MAX_SEND_CHARS = 100000;
+
+async function sendToWebApp(tab, selectionText) {
+  // Read from the page so line breaks survive (the menu's selectionText collapses them)
+  let text = '';
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => getSelection().toString() || document.body.innerText,
+    });
+    text = res?.result || '';
+  } catch (err) {
+    console.warn('Could not read page text:', err);
+  }
+  text ||= selectionText || '';
+  chrome.tabs.create({ url: `${WEB_APP_URL}#text=${encodeURIComponent(text.slice(0, MAX_SEND_CHARS))}`, index: tab.index + 1 });
+}
 const isPdfUrl = (url) => /^(https?|file):/.test(url || '') && /\.pdf($|[?#])/i.test(url);
 
 export async function startReading(tabId, mode = 'auto') {
@@ -89,6 +109,7 @@ chrome.commands.onCommand.addListener((command, tab) => { if (command === 'read'
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'open-library') { chrome.tabs.create({ url: chrome.runtime.getURL('library.html') }); return; }
   if (info.menuItemId === 'open-pdf') { chrome.tabs.create({ url: READER_URL }); return; }
+  if (info.menuItemId === 'send-to-web') { if (tab) sendToWebApp(tab, info.selectionText).catch(console.error); return; }
   if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page');
 });
 chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });
