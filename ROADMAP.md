@@ -8,7 +8,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Paragraph chunking**~~ — Done: long text is split into paragraphs and synthesized in sequence with a progress bar
 - ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
-- **Cleaner "Load from URL"** — `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. Use Readability-style extraction like the extension does
+- ~~**Cleaner "Load from URL"**~~ — Done: `/extract_text` drops sidebars, menus and boxes, then reads the block with the most paragraph text when there is no `<main>`/`<article>`
 - **"Load from URL" on the Cloudflare Worker** — the Worker's `/extract_text` returns 501, so the button only works against the Render/FastAPI backend
 - **Test speech on the deployed Worker** — `/health` and `/voices` work at `dan-tts.macdaddydwj.workers.dev`, but `/synthesize` hasn't been tried there yet. Microsoft's voice service may treat Cloudflare's servers differently (see `worker/README.md`). Run one synthesis from the tester
 - **Make the Worker the tester's default API** — `tester.html` still defaults to `https://dan-tts.onrender.com`, which sleeps when idle. Once the speech test passes, default to the Worker; when the tester is served by the Worker itself, use its own address
