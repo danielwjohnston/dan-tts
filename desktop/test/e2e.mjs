@@ -117,13 +117,26 @@ try {
   await win.waitForSelector('#chapters li', { timeout: 30000 });
   check('EPUB file from disk opens as a book', /book\.html\?file=/.test(win.url()) && (await win.locator('#chapters li').count()) === 2, win.url());
 
-  // Live archive.org: one retry, since its servers sometimes time out from CI machines
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await win.goto('app://reader/book.html?id=aristotlesmetaph0001aris');
-    if (await win.waitForSelector('#chapters li', { timeout: 120000 }).then(() => true, () => false)) break;
-  }
-  const aristotle = await win.locator('#chapters li').count();
-  check('archive.org book opens (Aristotle\'s Metaphysics)', aristotle > 50, `${aristotle} chapters; ${await win.textContent('#toc-status')}`);
+  // archive.org item: archive.org often times out from CI machines, so the app's download
+  // handler answers archive.org with canned replies (an item's metadata, then the fixture
+  // EPUB). Everything else (book.js, lib/archive.js, the EPUB reader) runs for real.
+  const epub = readFileSync(join(fixtures, 'book.epub')).toString('base64');
+  await app.evaluate(({ ipcMain, net }, epub) => {
+    ipcMain.removeHandler('dan:fetch');
+    ipcMain.handle('dan:fetch', async (_e, url) => {
+      const reply = (body, contentType) => ({ ok: true, status: 200, url, contentType, body: new Uint8Array(body) });
+      if (url === 'https://archive.org/metadata/lighthousekeeper00test') {
+        const meta = { metadata: { title: 'The Lighthouse Keeper', creator: 'Test Author' }, files: [{ name: 'lighthouse_keeper.epub', format: 'EPUB' }, { name: 'lighthouse_keeper_lcp.epub', format: 'LCP Encrypted EPUB' }] };
+        return reply(Buffer.from(JSON.stringify(meta)), 'application/json');
+      }
+      if (url === 'https://archive.org/download/lighthousekeeper00test/lighthouse_keeper.epub') return reply(Buffer.from(epub, 'base64'), 'application/epub+zip');
+      const res = await net.fetch(url);
+      return { ok: res.ok, status: res.status, url: res.url, contentType: res.headers.get('content-type') || '', body: new Uint8Array(await res.arrayBuffer()) };
+    });
+  }, epub);
+  await win.goto('app://reader/book.html?id=lighthousekeeper00test');
+  await win.waitForSelector('#chapters li', { timeout: 30000 }).catch(() => {});
+  check('archive.org item opens as a book (plain EPUB picked, not the encrypted one)', (await win.locator('#chapters li').count()) === 2 && /The Lighthouse Keeper/.test(await win.textContent('#book-title')), await win.textContent('#toc-status'));
 
   // 6. Library: everything is listed, and pasted text reopens where it left off
   await win.goto('app://reader/home.html');
