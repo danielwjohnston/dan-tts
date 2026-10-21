@@ -2,11 +2,17 @@ name: Desktop app
 
 # Builds the dan-tts Reader desktop app for Windows, macOS and Linux (unsigned) and runs its
 # end-to-end test on Linux. Installers are attached to each run under "Artifacts".
-# To publish a release: bump "version" in desktop/package.json, merge, then push a tag
-# desktop-v<version> (e.g. git tag desktop-v0.2.0 && git push origin desktop-v0.2.0).
-# The installers are then attached to a GitHub Release with a permanent download link.
+# To publish a release: bump "version" in desktop/package.json and merge, then either push a
+# tag desktop-v<version> (git tag desktop-v0.2.0 && git push origin desktop-v0.2.0), or run
+# this workflow by hand on main with "Publish a release" ticked (it creates the tag). The
+# installers are then attached to a GitHub Release with a permanent download link.
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: Publish a GitHub Release (tag desktop-v<version from desktop/package.json>)
+        type: boolean
+        default: false
   push:
     branches: [main]
     tags: ['desktop-v*'] # path filters don't apply to tag pushes
@@ -65,7 +71,7 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (inputs.release && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
@@ -73,14 +79,17 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
-      - name: Tag matches the app version
+      - name: Release tag from the app version
         run: |
           version="desktop-v$(node -p "require('./desktop/package.json').version")"
-          if [ "$version" != "$TAG" ]; then echo "::error::Tag $TAG doesn't match desktop/package.json ($version)"; exit 1; fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match desktop/package.json ($version)"; exit 1
+          fi
+          echo "TAG=$version" >> "$GITHUB_ENV"
       - run: gh run download "$GITHUB_RUN_ID" --dir installers --pattern 'dan-tts-reader-*'
       - name: Publish the release
         run: |
-          gh release create "$TAG" installers/*/* --title "dan-tts Reader ${TAG#desktop-v}" --generate-notes --notes "Unsigned builds: see desktop/README.md for the first-run steps on Windows and macOS. Use a personal computer, not a work-managed one."
+          # --target: when run by hand, this creates the tag on the commit that was built
+          gh release create "$TAG" installers/*/* --target "$GITHUB_SHA" --title "dan-tts Reader ${TAG#desktop-v}" --generate-notes --notes "Unsigned builds: see desktop/README.md for the first-run steps on Windows and macOS. Use a personal computer, not a work-managed one."
