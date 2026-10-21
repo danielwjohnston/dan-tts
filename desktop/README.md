@@ -22,8 +22,8 @@ A desktop app for Windows, macOS and Linux that reads **web pages, PDFs (includi
 ## Publish a release
 
 1. Bump `"version"` in `desktop/package.json` and merge it.
-2. Tag that commit and push the tag: `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0` (the tag must match the version).
-3. The **Desktop app** workflow tests, builds all three systems, and publishes a GitHub Release with the installers attached.
+2. Either push a tag for that commit, `git tag desktop-v0.2.0 && git push origin desktop-v0.2.0` (the tag must match the version), or on GitHub open **Actions** → **Desktop app** → **Run workflow** on `main` with **Publish a GitHub Release** ticked, which creates the tag for you.
+3. The workflow tests, builds all three systems, and publishes a GitHub Release with the installers attached.
 
 ## Run from source
 
