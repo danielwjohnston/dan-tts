@@ -42,7 +42,9 @@ const ctx = await chromium.launchPersistentContext('', {
     ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`, '--proxy-bypass-list=127.0.0.1;localhost'] : [])],
 });
 try {
-  let [first] = ctx.serviceWorkers(); if (!first) first = await ctx.waitForEvent('serviceworker');
+  // Chromium's built-in extensions have service workers too: find ours by its script
+  const ours = (w) => w.url().startsWith('chrome-extension://') && w.url().endsWith('/background.js');
+  const first = ctx.serviceWorkers().find(ours) || await ctx.waitForEvent('serviceworker', { predicate: ours });
   const extId = new URL(first.url()).host;
   // MV3 workers stop when idle and restart on demand, and other components (the PDF
   // viewer) have workers too, so always look ours up fresh
@@ -71,8 +73,10 @@ try {
   check('Readability removed nav, sidebar, newsletter and footer',
     !/Subscribe now|Trending|newsletter|Cookie settings/i.test(articleText), (articleText.match(/.{0,40}(Subscribe now|Trending|newsletter|Cookie settings).{0,40}/i) || [''])[0]);
 
-  // 2. Highlighting advances through words
-  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 30000 });
+  // 2. Highlighting advances through words. The first speech also starts the offscreen
+  // player and the voice connection, so allow longer, and say what the reader shows if not
+  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 60000 })
+    .catch(async (e) => { throw new Error(`no word highlighted; reader status: "${await status()}"`, { cause: e }); });
   const seen = new Set();
   for (let i = 0; i < 25; i++) { const w = await activeWord(); if (w) seen.add(w[0]); await page.waitForTimeout(120); }
   const order = [...seen];
