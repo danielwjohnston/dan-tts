@@ -30,7 +30,7 @@ npm install
 npx wrangler dev        # http://127.0.0.1:8787, API only
 ```
 
-The Worker imports the shared engine from `../engine/src`, so there's nothing to copy or sync. `src/extract.js` is the Load from URL implementation (a small HTML tokenizer, since there is no DOM in a Worker). Tests: `node --test worker/test/*.test.js` (offline; CI runs them).
+The Worker imports the shared engine from `../engine/src`, so there's nothing to copy or sync. `src/extract.js` is the Load from URL implementation (a small HTML tokenizer, since there is no DOM in a Worker); the Python server's `/extract_text` in `app/main.py` follows the same rules, so change both together. Tests: `node --test worker/test/*.test.js` (offline; CI runs them).
 
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.

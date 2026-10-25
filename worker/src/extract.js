@@ -236,7 +236,7 @@ export function htmlToText(html) {
       i = e ? e.index + e[0].length : n;
       if (name === 'title' && title === null && !dropDepth) title = decodeEntities(raw).replace(/\s+/g, ' ').trim();
       else if (!DROP.has(name) && !dropDepth) emitText(decodeEntities(raw));
-      else emitBreak(1);
+      else emitText(' '); // an invisible <script> or <style> mid-sentence doesn't break the line
       continue;
     }
     const drop = DROP.has(name) || isChrome(name, attrs);

@@ -174,3 +174,60 @@ def test_extract_skips_sidebar_and_header_without_main(client, monkeypatch):
     assert "next morning" in text
     assert "Log in" not in text
     assert "Navigation links" not in text
+
+
+# ---- /extract_text: the same rules as the Cloudflare Worker (worker/test/extract.test.js) ----
+
+def _extract(client, monkeypatch, page):
+    async def fake_fetch(url):
+        return page
+
+    monkeypatch.setattr(main, "_fetch_html", fake_fetch)
+    r = client.post("/extract_text", json={"url": "https://book.example/"})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+STORY = ("<p>" + "The story begins on a dark and stormy night. " * 4 + "</p>"
+         "<p>It continues the next morning in the same town.</p>")
+
+
+def test_extract_reads_main_and_drops_code_and_chrome(client, monkeypatch):
+    page = ("<html><head><title>Example  Page</title></head><body><header><p>Site name Log in</p></header>"
+            "<nav><a href='/'>Home</a></nav><main><h1>Title</h1>" + STORY +
+            "<script>var x = '<p>not text</p>';</script><style>p { color: red }</style></main>"
+            "<footer><p>Copyright</p></footer></body></html>")
+    data = _extract(client, monkeypatch, page)
+    assert data["title"] == "Example Page"
+    assert data["text"].startswith("Title\n\nThe story begins")
+    for bad in ("Log in", "Home", "not text", "color", "Copyright"):
+        assert bad not in data["text"]
+
+
+def test_extract_skips_mediawiki_chrome_hidden_elements_and_buttons(client, monkeypatch):
+    page = ("<html><body><main><div id='siteSub' class='noprint'>From Wikisource</div>"
+            "<div class='ws-header wst-header ws-noexport noprint'><div>←</div><a href='/toc'>Contents</a><span>Chapter 2</span><div>→</div></div>"
+            "<span role='button' class='oo-ui-buttonElement-button'>Download</span>"
+            "<div class='hatnote' role='note'>For other uses, see Library (disambiguation).</div>"
+            "<p hidden>Hidden paragraph text</p><p aria-hidden='true'>Decorative text</p><p style='display:none'>Invisible text</p>"
+            "<span class='sr-only'>Skip to content</span>"
+            "<h2>Chapter one <span class='mw-editsection'>[edit]</span></h2>" + STORY +
+            "<div id='catlinks' class='catlinks'><a href='#'>Category: Novels</a></div></main></body></html>")
+    text = _extract(client, monkeypatch, page)["text"]
+    assert text.startswith("Chapter one\n\nThe story begins")
+    for bad in ("Wikisource", "Contents", "→", "Download", "other uses", "Hidden", "Decorative", "Invisible", "Skip", "edit", "Category"):
+        assert bad not in text, bad
+
+
+def test_extract_paragraphs_and_inline_text(client, monkeypatch):
+    page = ("<html><body><div><p>Hello <b>bold</b> and <i>italic</i>, with a<br>line break.</p>"
+            "<h2>Heading</h2><ul><li>First item</li><li>Second item</li></ul>"
+            "<p>Spaced&nbsp;words &amp; entities: &ldquo;quoted&rdquo; &eacute; &#8212;</p></div></body></html>")
+    assert _extract(client, monkeypatch, page)["text"] == (
+        "Hello bold and italic, with a\nline break.\n\nHeading\n\nFirst item\n\nSecond item\n\nSpaced words & entities: “quoted” é —")
+
+
+def test_extract_reads_first_article_when_there_is_no_main(client, monkeypatch):
+    page = ("<html><body><div class='promo'><p>Buy now</p></div><article><p>One two three four five six.</p></article>"
+            "<article><p>Second article text here.</p></article></body></html>")
+    assert _extract(client, monkeypatch, page)["text"] == "One two three four five six."
