@@ -23,6 +23,7 @@ const pdfs = {}; // filled after launch: generated with Chromium so no binaries 
 const server = createServer((req, res) => {
   const name = req.url.slice(1);
   if (pdfs[name]) { res.setHeader('Content-Type', 'application/pdf'); res.end(pdfs[name]); return; }
+  if (name.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(here, 'fixtures', name))); return; }
   res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', 'article.html')));
 }).listen(0);
 const origin = `http://127.0.0.1:${server.address().port}`;
@@ -32,13 +33,18 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
 
 const ctx = await chromium.launchPersistentContext('', {
   executablePath: process.env.CHROMIUM_PATH || undefined,
+  // Extensions need full Chromium: Playwright's default headless browser (headless shell)
+  // can't load them, and the test would time out waiting for the service worker
+  channel: process.env.CHROMIUM_PATH ? undefined : 'chromium',
   headless: true,
   args: ['--headless=new', `--disable-extensions-except=${ext}`, `--load-extension=${ext}`, '--autoplay-policy=no-user-gesture-required',
     // Behind an HTTPS proxy (CI sandboxes), keep the local fixture server off the proxy
     ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`, '--proxy-bypass-list=127.0.0.1;localhost'] : [])],
 });
 try {
-  let [first] = ctx.serviceWorkers(); if (!first) first = await ctx.waitForEvent('serviceworker');
+  // Chromium's built-in extensions have service workers too: find ours by its script
+  const ours = (w) => w.url().startsWith('chrome-extension://') && w.url().endsWith('/background.js');
+  const first = ctx.serviceWorkers().find(ours) || await ctx.waitForEvent('serviceworker', { predicate: ours });
   const extId = new URL(first.url()).host;
   // MV3 workers stop when idle and restart on demand, and other components (the PDF
   // viewer) have workers too, so always look ours up fresh
@@ -67,8 +73,10 @@ try {
   check('Readability removed nav, sidebar, newsletter and footer',
     !/Subscribe now|Trending|newsletter|Cookie settings/i.test(articleText), (articleText.match(/.{0,40}(Subscribe now|Trending|newsletter|Cookie settings).{0,40}/i) || [''])[0]);
 
-  // 2. Highlighting advances through words
-  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 30000 });
+  // 2. Highlighting advances through words. The first speech also starts the offscreen
+  // player and the voice connection, so allow longer, and say what the reader shows if not
+  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 60000 })
+    .catch(async (e) => { throw new Error(`no word highlighted; reader status: "${await status()}"`, { cause: e }); });
   const seen = new Set();
   for (let i = 0; i < 25; i++) { const w = await activeWord(); if (w) seen.add(w[0]); await page.waitForTimeout(120); }
   const order = [...seen];
@@ -246,11 +254,35 @@ try {
   check('PDFs with no text at all explain why', true);
   await local.close();
 
+  // Books: an EPUB link pasted into the Books page, read chapter by chapter, and an EPUB file
+  const books = await ctx.newPage();
+  const bookErrors = [];
+  books.on('pageerror', (e) => bookErrors.push(e.message));
+  await books.goto(`chrome-extension://${extId}/book.html`);
+  await books.fill('#q', `${origin}/book.epub`);
+  await books.click('#search-form button');
+  await books.waitForSelector('#chapters li', { timeout: 30000 });
+  const toc = (await books.textContent('#toc-view')).replace(/\s+/g, ' ');
+  check('Books: a pasted EPUB link opens with its chapters', /The Lighthouse Keeper/.test(toc) && /The Storm/.test(toc) && /Morning Light/.test(toc), toc.slice(0, 120));
+  await books.click('#chapters li:nth-child(2) a');
+  await books.waitForSelector('#article p');
+  await books.click('#read');
+  await books.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 60000 });
+  const chapterText = await books.evaluate(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.article').innerText);
+  check('Books: a chapter is read aloud, without the page\'s links', /By dawn the sea was calm/.test(chapterText) && !/The wind rose|Chapters/.test(chapterText), JSON.stringify(chapterText.slice(0, 80)));
+  await books.keyboard.press('Escape');
+  await books.goto(`chrome-extension://${extId}/book.html`);
+  await books.setInputFiles('#file', join(here, 'fixtures', 'book.epub'));
+  await books.waitForSelector('#chapters li', { timeout: 30000 });
+  check('Books: an EPUB file opens from the computer', /book\.html\?file=/.test(books.url()) && (await books.locator('#chapters li').count()) === 2, books.url());
+  check('no errors on the Books page', bookErrors.length === 0, bookErrors.join('; '));
+  await books.close();
+
   const lib2 = await ctx.newPage();
   await lib2.goto(`chrome-extension://${extId}/library.html`);
   await lib2.waitForSelector('#list li');
   const lib2Text = (await lib2.textContent('#list')).replace(/\s+/g, ' ');
-  check('library lists PDFs (web and local)', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text), lib2Text.slice(0, 160));
+  check('library lists PDFs (web and local) and book chapters', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text) && /Book · 127\.0\.0\.1/.test(lib2Text), lib2Text.slice(0, 160));
   await lib2.close();
 
   check('no page errors', pageErrors.length === 0, pageErrors.join('; '));

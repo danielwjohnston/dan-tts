@@ -12,19 +12,23 @@ const out = join(root, 'desktop', 'app');
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, 'icons'), { recursive: true });
-for (const f of ['content.js', 'content.css', 'offscreen.js', 'pdf-reader.js']) cpSync(join(ext, f), join(out, f));
+for (const f of ['content.js', 'content.css', 'offscreen.js', 'pdf-reader.js', 'book.js']) cpSync(join(ext, f), join(out, f));
 cpSync(join(ext, 'lib'), join(out, 'lib'), { recursive: true });
 cpSync(join(ext, 'engine'), join(out, 'engine'), { recursive: true });
 cpSync(join(ext, 'icons', '128.png'), join(out, 'icons', '128.png'));
 for (const f of readdirSync(src)) if (f !== 'csp.txt') cpSync(join(src, f), join(out, f));
 
-// The extension's PDF reader page, adapted: same CSP as the other pages, the chrome.* shim
-// first, a way home, and desktop wording
+// The extension's PDF reader and Books pages, adapted: same CSP as the other pages, the
+// chrome.* shim first, a way home, and desktop wording
 const csp = readFileSync(join(src, 'csp.txt'), 'utf8').trim();
-let html = readFileSync(join(ext, 'pdf-reader.html'), 'utf8');
-const patch = (from, to) => { if (!html.includes(from)) throw new Error(`pdf-reader.html changed: can't find ${from}`); html = html.replace(from, to); };
-patch('<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="${csp}">\n  <link rel="stylesheet" href="desktop.css">\n  <script src="chrome-shim.js"></script>`);
-patch('<body>', '<body>\n  <div class="topbar"><a href="home.html">← Home</a></div>');
-patch('or press <strong>Alt+Shift+R</strong> while viewing a PDF online', 'or paste a PDF link on the home page');
-writeFileSync(join(out, 'pdf-reader.html'), html);
+function adapt(name, extra = []) {
+  let html = readFileSync(join(ext, name), 'utf8');
+  const patch = (from, to) => { if (!html.includes(from)) throw new Error(`${name} changed: can't find ${from}`); html = html.replace(from, to); };
+  patch('<meta charset="utf-8">', `<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="${csp}">\n  <link rel="stylesheet" href="desktop.css">\n  <script src="chrome-shim.js"></script>`);
+  patch('<body>', '<body>\n  <div class="topbar"><a href="home.html">← Home</a></div>');
+  for (const [from, to] of extra) patch(from, to);
+  writeFileSync(join(out, name), html);
+}
+adapt('pdf-reader.html', [['or press <strong>Alt+Shift+R</strong> while viewing a PDF online', 'or paste a PDF link on the home page']]);
+adapt('book.html');
 console.log('desktop/app assembled');

@@ -41,10 +41,12 @@ async function render() {
     let host = item.url;
     try {
       const u = new URL(item.url);
-      if (u.protocol === 'chrome-extension:' && u.pathname.endsWith('/book.html')) {
+      const own = item.url.startsWith(chrome.runtime.getURL('')); // chrome-extension: or moz-extension:
+      if (own && u.pathname.endsWith('/book.html')) {
         // Book chapters live on the extension's own pages; show where the book came from instead
-        host = 'archive.org';
-      } else if (u.protocol === 'chrome-extension:') {
+        const link = u.searchParams.get('url');
+        host = `Book · ${u.searchParams.has('id') ? 'archive.org' : link ? new URL(link).hostname.replace(/^www\./, '') : 'file on this computer'}`;
+      } else if (own) {
         const inner = u.searchParams.get('url');
         host = inner ? `PDF · ${new URL(inner).hostname.replace(/^www\./, '') || 'file'}` : 'PDF (local file: choose it again to resume)';
       } else host = u.hostname.replace(/^www\./, '');
