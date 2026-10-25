@@ -18,6 +18,12 @@
   let state = 'idle';
   let activeToken = -1;
   let userScrolledAt = 0;
+  // Next page (chapter-per-page books, multi-page articles)
+  let nextLink = null;      // { url, label } of the page being read, when it has a same-site "next" link
+  let nextDoc = null;       // a page fetched by "Continue": pageParagraphs() returns it instead of the DOM
+  let hops = 0;             // pages continued into without leaving the tab (history.pushState)
+  let autoHere = false;     // this site is remembered: continue on its own when a page ends
+  let countdown = null;
 
   // ---- UI (shadow DOM so pages can't restyle it and it can't break pages) ----
   const host = document.createElement('dan-tts-root');
@@ -46,6 +52,15 @@
       select { max-width: 170px; }
       .status { color: var(--muted); font-size: 12px; min-width: 56px; text-align: center; }
       .error { color: #e5484d; }
+      .nextbox { margin-top: 48px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--bar); font-size: 16px; line-height: 1.5; }
+      .nextbox .nexttitle { font-weight: 600; }
+      .nextbox .nextbtns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .nextbox button { border: 1px solid var(--border); padding: 8px 14px; }
+      .nextbox button.go { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+      .nextbox button.go:hover { background: var(--accent); filter: brightness(1.1); }
+      .nextbox .nextnote { color: var(--muted); font-size: 13px; margin-top: 8px; }
+      .nextbox .nextnote:empty { display: none; }
+      .nextbox .nextnote a { color: inherit; text-decoration: underline; cursor: pointer; }
       .host { --bg: #fbfaf7; --fg: #1d1d1f; --muted: #6b6b70; --bar: #ffffff; --border: #e3e1dc; --hover: rgba(0,0,0,.06);
         --hl: #fde68a; --hl-fg: inherit; --accent: #4f46e5; --accent-fg: #fff; }
       @media (prefers-color-scheme: dark) {
@@ -102,21 +117,27 @@
   const BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,pre,figcaption,dt,dd,td,th';
 
   function pageParagraphs() {
+    if (nextDoc) return nextDoc;
     // The PDF reader page hands over paragraphs it already extracted
     if (window.__danTtsDoc) return window.__danTtsDoc;
-    let title = document.title, byline = '', blocks = [];
+    return docParagraphs(document, document.title, () => document.body.innerText);
+  }
+
+  // Readable paragraphs of a document: the live page, or one fetched by "Continue"
+  function docParagraphs(doc, fallbackTitle, fallbackText) {
+    let title = fallbackTitle, byline = '', blocks = [];
     try {
-      const parsed = new Readability(document.cloneNode(true)).parse();
+      const parsed = new Readability(doc.cloneNode(true)).parse();
       if (parsed?.content) {
         title = parsed.title || title;
         byline = parsed.byline || '';
-        const doc = new DOMParser().parseFromString(parsed.content, 'text/html');
-        const els = [...doc.body.querySelectorAll(BLOCKS)].filter((el) => !el.querySelector(BLOCKS));
+        const content = new DOMParser().parseFromString(parsed.content, 'text/html');
+        const els = [...content.body.querySelectorAll(BLOCKS)].filter((el) => !el.querySelector(BLOCKS));
         blocks = els.map((el) => ({ tag: /^H[1-6]$/.test(el.tagName) ? 'h' : 'p', text: el.textContent.replace(/\s+/g, ' ').trim() }));
       }
     } catch (e) { console.warn('dan-tts: Readability failed', e); }
     if (blocks.filter((b) => b.text).length === 0) {
-      blocks = document.body.innerText.split(/\n\s*\n|\n/).map((t) => ({ tag: 'p', text: t.replace(/\s+/g, ' ').trim() }));
+      blocks = fallbackText().split(/\n\s*\n|\n/).map((t) => ({ tag: 'p', text: t.replace(/\s+/g, ' ').trim() }));
     }
     // "Article Title | Site Name" → "Article Title" (don't read the site name aloud)
     const parts = title.split(/\s+[|·•–—]\s+|\s+-\s+/);
@@ -125,6 +146,122 @@
     const BOILERPLATE = /\b(subscribe|newsletter|sign up|sign in|log in|cookie|advertisement|share this|follow us)\b/i;
     blocks = blocks.filter((b) => b.text && !(b.text.length < 140 && BOILERPLATE.test(b.text)));
     return { title, byline, blocks };
+  }
+
+  // ---- Next page ----
+  // A same-site "next" link (next chapter, next page of an article) is offered at the end of
+  // the text. "Continue" fetches that page and reads it here, in this tab, moving the address
+  // with history.pushState so each page keeps its own place in the library. "Always on this
+  // site" does that by itself whenever a page ends. Closing the reader afterwards reloads the
+  // tab, so the page under the overlay is the one the address bar shows.
+  const siteHost = () => { try { return new URL(/^https?:/.test(window.__danTtsDocId || '') ? window.__danTtsDocId : location.href).hostname; } catch { return location.hostname; } };
+
+  function findNext() {
+    if (nextDoc) return nextDoc.next || null;
+    if (window.__danTtsDoc) return window.__danTtsDoc.next || null; // the desktop reader finds it when it downloads the page
+    return typeof danNextLink !== 'undefined' ? danNextLink.find(document, document.baseURI, location.href) : null;
+  }
+
+  async function setAutoNext(on) {
+    autoHere = on;
+    const { autoNext = {} } = await chrome.storage.sync.get('autoNext');
+    if (on) autoNext[siteHost()] = true; else delete autoNext[siteHost()];
+    await chrome.storage.sync.set({ autoNext });
+  }
+
+  function showNextBox(state = autoHere ? 'auto' : 'ask') {
+    article.querySelector('.nextbox')?.remove();
+    if (!nextLink || mode !== 'page') return;
+    const box = document.createElement('div');
+    box.className = 'nextbox';
+    const label = document.createElement('div');
+    const title = document.createElement('span');
+    title.className = 'nexttitle';
+    title.textContent = nextLink.label;
+    label.append('Next: ', title);
+    const btns = document.createElement('div');
+    btns.className = 'nextbtns';
+    const note = document.createElement('div');
+    note.className = 'nextnote';
+    const button = (cls, text, fn) => { const b = document.createElement('button'); b.className = cls; b.textContent = text; b.addEventListener('click', fn); btns.append(b); };
+    const link = (text, fn) => { const a = document.createElement('a'); a.textContent = text; a.addEventListener('click', (e) => { e.preventDefault(); fn(); }); return a; };
+    if (state === 'countdown') {
+      button('go', 'Go now', () => goNext());
+      button('stay', 'Stay here', () => { cancelCountdown(); setStatus('Done'); showNextBox('stayed'); });
+    } else {
+      button('go', 'Continue ▸', () => goNext());
+      if (!autoHere) button('always', 'Always on this site', () => { setAutoNext(true).catch(() => {}); goNext(); });
+    }
+    if (autoHere) {
+      const lead = state === 'stayed' ? 'Not continuing this time. ' : state === 'countdown' ? '' : 'Continues on its own when this page ends. ';
+      if (lead) note.append(lead);
+      note.append(link('Turn off for this site', () => { setAutoNext(false).catch(() => {}); showNextBox(); }));
+    }
+    box.append(label, btns, note);
+    article.append(box);
+  }
+
+  function pageEnded() {
+    if (!nextLink) return;
+    if (autoHere) { startCountdown(); return; }
+    if (Date.now() - userScrolledAt > 3000) article.querySelector('.nextbox')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function startCountdown() {
+    cancelCountdown();
+    showNextBox('countdown');
+    let n = 3;
+    const tick = () => {
+      if (n === 0) { countdown = null; goNext(); return; }
+      setStatus(`Next page in ${n}…`);
+      n--;
+      countdown = setTimeout(tick, 1000);
+    };
+    tick();
+  }
+  function cancelCountdown() { clearTimeout(countdown); countdown = null; }
+
+  async function fetchNextDoc(url) {
+    const res = await fetch(url, { headers: { Accept: 'text/html,application/xhtml+xml' } });
+    if (!res.ok || !/html|xml/i.test(res.headers.get('content-type') || '')) throw new Error(`HTTP ${res.status}`);
+    const finalUrl = res.url || url;
+    if (new URL(finalUrl).origin !== location.origin) throw new Error('redirected off the site');
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const base = doc.createElement('base');
+    base.href = finalUrl;
+    doc.head.prepend(base);
+    const next = typeof danNextLink !== 'undefined' ? danNextLink.find(doc, finalUrl, finalUrl) : null;
+    const parsed = docParagraphs(doc, doc.title || nextLink.label, () => {
+      doc.querySelectorAll('script,style,noscript,template').forEach((el) => el.remove());
+      return doc.body.textContent;
+    });
+    if (!parsed.blocks.some((b) => b.text)) throw new Error('no readable text');
+    return { ...parsed, url: finalUrl, next };
+  }
+
+  async function goNext() {
+    if (!nextLink) return;
+    cancelCountdown();
+    const { url } = nextLink;
+    // Desktop app: its reader page downloads any address and starts reading by itself
+    if (window.__danTtsDoc?.next) { location.href = `reader.html?url=${encodeURIComponent(url)}`; return; }
+    setStatus('Loading next…');
+    let doc = null;
+    try { doc = await fetchNextDoc(url); } catch (e) { console.warn('dan-tts: could not load the next page here, opening it instead', e); }
+    if (doc) {
+      stop(false); // saves this page's spot under its own address, before the address changes
+      try { history.pushState(null, '', doc.url); } catch { doc = null; }
+    }
+    if (!doc) {
+      // Load the page for real; the background starts the reader again once it is up
+      await chrome.runtime.sendMessage({ target: 'background', cmd: 'continue', url }).catch(() => {});
+      location.href = url;
+      return;
+    }
+    hops++;
+    nextDoc = doc;
+    document.title = doc.title;
+    start('page');
   }
 
   function buildPage() {
@@ -240,6 +377,13 @@
     if (mode === 'selection' && !hasSelection) mode = 'page';
 
     const text = mode === 'page' ? buildPage() : buildSelection(sel);
+    nextLink = mode === 'page' ? findNext() : null;
+    autoHere = false;
+    if (nextLink) {
+      const { autoNext } = await chrome.storage.sync.get('autoNext');
+      autoHere = !!autoNext?.[siteHost()];
+    }
+    showNextBox();
     chunks = chunkText(text);
     chunkStart = [];
     let n = 0;
@@ -273,6 +417,7 @@
 
   function stop(hide = true) {
     clearInterval(keepAlive);
+    cancelCountdown();
     if (mode === 'page' && lastPos && state !== 'idle') saveProgress(lastPos); // exact spot on close
     lastPos = null;
     if (mode) toPlayer('stop');
@@ -284,6 +429,8 @@
       bar.classList.add('hidden');
       document.documentElement.style.overflow = '';
       mode = null;
+      // After continuing to other pages, show the page the address bar now names
+      if (hops) { hops = 0; location.reload(); }
     }
   }
 
@@ -333,6 +480,9 @@
     else if (mode === 'page' && e.key === 'ArrowLeft') { $('.prev').click(); e.preventDefault(); }
   }, true);
 
+  // Back/forward after continuing: close, which reloads the page the address bar now names
+  addEventListener('popstate', () => { if (hops) stop(); });
+
   window.__danTtsStart = start; // used by the PDF reader page
 
   // ---- Messages from the player (via the background worker) ----
@@ -358,6 +508,7 @@
         if (Date.now() - lastSave > 2000) { lastSave = Date.now(); saveProgress(lastPos); }
       }
     } else if (msg.event === 'state') {
+      if (countdown && msg.state !== 'paused') { cancelCountdown(); showNextBox(); } // playing again (⟲, a click): don't leave mid-page
       if (msg.state === 'loading' && msg.chunk !== currentChunk) clearHighlight(); // don't leave the old word lit
       state = msg.state;
       currentChunk = msg.chunk;
@@ -372,6 +523,7 @@
       playBtn.textContent = '▶';
       setStatus('Done');
       clearHighlight();
+      pageEnded();
     } else if (msg.event === 'error') {
       setStatus('Error', true);
       statusEl.title = msg.message;

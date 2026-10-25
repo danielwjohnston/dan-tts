@@ -1,7 +1,7 @@
 // End-to-end test against the live voice service: node extension/test/e2e.mjs
 // Loads the extension into Chromium, reads a fixture page, and checks highlighting,
 // controls, selection mode and that websites can't borrow the header rule.
-import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,9 @@ const server = createServer((req, res) => {
   const name = req.url.slice(1);
   if (pdfs[name]) { res.setHeader('Content-Type', 'application/pdf'); res.end(pdfs[name]); return; }
   if (name.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(here, 'fixtures', name))); return; }
-  res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', 'article.html')));
+  // Named fixture pages (the chapter pages); anything else is the article
+  const fixture = /^[\w-]+\.html$/.test(name) && existsSync(join(here, 'fixtures', name)) ? name : 'article.html';
+  res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', fixture)));
 }).listen(0);
 const origin = `http://127.0.0.1:${server.address().port}`;
 
@@ -152,6 +154,72 @@ try {
   check('selection is highlighted in place', /^[\w,.]+$/.test(hl), `current word "${hl}"`);
   check('no overlay in selection mode', await shadow(`return !root.querySelector('.overlay.open');`));
   await page.keyboard.press('Escape');
+
+  // 7b. Continue to the next page: chapter pages linked by rel=next, a "Next →" link and a pager arrow
+  const overlayHas = (text, timeout = 20000) => page.waitForFunction((t) => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.article')?.innerText.includes(t), text, { timeout });
+  const waitWord = () => page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 60000 });
+  const nextTitle = () => shadow(`return root.querySelector('.nextbox .nexttitle')?.textContent ?? null;`);
+  await page.goto(`${origin}/chapter1.html`);
+  await read('page');
+  await overlayHas('Nobody noticed the stranger');
+  check('a page with a next link offers it at the end of the text', (await nextTitle()) === 'Next chapter', `box: ${await shadow(`return root.querySelector('.nextbox')?.textContent;`)}`);
+  await waitWord();
+  await shadow(`root.querySelector('.nextbox .go').click();`);
+  await page.waitForURL(/\/chapter2\.html$/, { timeout: 20000 });
+  await overlayHas('behind the atlases');
+  await waitWord();
+  check('Continue reads the next page in the same tab: address and title move, no reload',
+    await page.evaluate(() => document.title === 'Chapter Two' && !!document.querySelector('dan-tts-root')) && (await shadow(`return root.querySelector('.article h1').textContent;`)) === 'Chapter Two', page.url());
+  check('the fetched page\'s own "Next →" link is found, so chapters chain', (await nextTitle()) === 'Next', `${await nextTitle()}`);
+  await shadow(`root.querySelector('.nextbox .always').click();`);
+  await page.waitForURL(/\/chapter3\.html$/, { timeout: 20000 });
+  await overlayHas('heavier than it looked');
+  const autoNext = (await sw.evaluate(() => chrome.storage.sync.get('autoNext'))).autoNext;
+  check('"Always on this site" is remembered per site', autoNext?.['127.0.0.1'] === true, JSON.stringify(autoNext));
+  await page.waitForFunction(() => /Continues on its own/.test(document.querySelector('dan-tts-root').shadowRoot.querySelector('.nextbox .nextnote')?.textContent || ''), null, { timeout: 10000 });
+  check('a pager arrow marked "next" is found and labelled from its title', (await nextTitle()) === 'Chapter Four', `${await nextTitle()}`);
+  // Chapter 3 is one sentence: when it ends, a countdown runs. "Stay here" stops it; ⟲ reads it
+  // again, and the second countdown runs out and continues on its own
+  const countingDown = () => page.waitForFunction(() => /^Next page in \d…$/.test(document.querySelector('dan-tts-root').shadowRoot.querySelector('.status').textContent), null, { timeout: 60000 });
+  await countingDown();
+  await shadow(`root.querySelector('.nextbox .stay').click();`);
+  await page.waitForTimeout(1500);
+  check('when a page ends on a remembered site, a countdown offers to continue, and Stay here stops it',
+    (await status()) === 'Done' && /\/chapter3\.html$/.test(page.url()) && /Turn off for this site/.test(await shadow(`return root.querySelector('.nextbox .nextnote').textContent;`)), `status "${await status()}" at ${page.url()}`);
+  await shadow(`root.querySelector('.restart').click();`);
+  await countingDown();
+  await page.waitForURL(/\/chapter4\.html$/, { timeout: 20000 });
+  await overlayHas('When she opened it');
+  await waitWord();
+  check('the countdown runs out and the next page is read on its own', true, page.url());
+  check('the last page has no next link, so nothing is offered', !(await shadow(`return !!root.querySelector('.nextbox');`)));
+  const reloaded = page.waitForEvent('load', { timeout: 20000 });
+  await page.keyboard.press('Escape');
+  await reloaded;
+  check('closing the reader reloads the tab on the page reached', /\/chapter4\.html$/.test(page.url()) && await page.evaluate(() => !document.querySelector('dan-tts-root') && document.body.innerText.includes('When she opened it')), page.url());
+
+  // The link finder on its own: what counts as "next", and what doesn't
+  await page.addScriptTag({ path: join(ext, 'lib', 'next-link.js') });
+  const heur = await page.evaluate((origin) => {
+    const find = (html, cur = `${origin}/book/ch2`) => danNextLink.find(new DOMParser().parseFromString(html, 'text/html'), cur, cur);
+    return {
+      relLink: find('<head><link rel="next" href="/book/ch3"></head><body><a href="/book/ch9">Next</a></body>'),
+      text: find('<a href="/book/ch1">Previous</a> <a href="/book/ch3" class="btn">Next ›</a>'),
+      arrowTitle: find('<a href="/book/ch1" title="Chapter 1">←</a> <a href="/book/ch3" title="Chapter 3"> → </a>'),
+      arrowOnly: find('<a href="/book/ch3">»</a>'),
+      arrowBack: find('<a href="/book/ch1">←</a>'),
+      pager: find('<div class="pager"><a class="prev" href="/book/ch1">‹</a><a class="next" href="/book/ch3">›</a></div>'),
+      crossSite: find('<a rel="next" href="https://other.example/ch3">Next</a>'),
+      self: find('<a rel="next" href="/book/ch2#top">Next</a>'),
+      js: find('<a href="javascript:void(0)">Next</a>'),
+      phrase: find('<a href="/series">Next articles in this series</a>'),
+    };
+  }, origin);
+  check('next-link finder: rel=next wins, then "Next ›" text, a pager\'s next class, a forward arrow; never a back arrow, other sites, the same page, javascript: or phrases',
+    heur.relLink?.url === `${origin}/book/ch3` && heur.relLink.label === 'ch3' && heur.text?.url === `${origin}/book/ch3` && heur.text.label === 'Next'
+    && heur.arrowTitle?.url === `${origin}/book/ch3` && heur.arrowTitle.label === 'Chapter 3' && heur.arrowOnly?.label === 'ch3' && heur.arrowBack === null
+    && heur.pager?.url === `${origin}/book/ch3` && heur.pager.label === 'ch3'
+    && heur.crossSite === null && heur.self === null && heur.js === null && heur.phrase === null, JSON.stringify(heur));
 
   // 8. Security: a website can't use the extension's header rule
   const siteAttempt = await page.evaluate((url) => new Promise((res) => {
@@ -283,6 +351,7 @@ try {
   await lib2.waitForSelector('#list li');
   const lib2Text = (await lib2.textContent('#list')).replace(/\s+/g, ' ');
   check('library lists PDFs (web and local) and book chapters', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text) && /Book · 127\.0\.0\.1/.test(lib2Text), lib2Text.slice(0, 160));
+  check('library lists each continued page separately', ['Chapter One', 'Chapter Two', 'Chapter Three', 'Chapter Four'].every((t) => lib2Text.includes(t)), lib2Text.slice(0, 200));
   await lib2.close();
 
   check('no page errors', pageErrors.length === 0, pageErrors.join('; '));

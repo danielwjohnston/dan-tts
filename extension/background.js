@@ -84,7 +84,7 @@ export async function startReading(tabId, mode = 'auto', bookPage = false) {
   }
   try {
     await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/Readability.js', 'lib/chunk-text.js', 'lib/align.js', 'content.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['lib/Readability.js', 'lib/chunk-text.js', 'lib/align.js', 'lib/next-link.js', 'content.js'] });
   } catch (err) {
     // chrome://, the Web Store and some other pages can't be scripted
     console.warn('dan-tts: cannot read this page', err);
@@ -159,11 +159,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Pages ping this while reading: Firefox suspends idle background pages (~30 s), which
   // would stop audio played here. Harmless in Chrome.
   if (msg.target === 'background' && msg.cmd === 'keepalive') { sendResponse({ ok: true }); return false; }
+  // "Continue to next page" when the reader couldn't fetch the page itself: the tab loads it
+  // for real, and reading starts again once it is up (see tabs.onUpdated below)
+  if (msg.target === 'background' && msg.cmd === 'continue' && sender.tab) {
+    chrome.storage.session.set({ pendingContinue: { tabId: sender.tab.id, url: msg.url, at: Date.now() } }).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+    return true;
+  }
   if (msg.target === 'background' && msg.cmd === 'voices') {
     getVoices().then((voices) => sendResponse({ voices }), (e) => sendResponse({ error: e.message }));
     return true;
   }
   return false;
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+  if (info.status !== 'complete') return;
+  const { pendingContinue: pending } = await chrome.storage.session.get('pendingContinue');
+  if (!pending || pending.tabId !== tabId) return;
+  // The address is only visible with access to the tab (Chrome keeps activeTab across
+  // same-site navigations); when it is, make sure this is the page we were sent to
+  if (tab.url && tab.url.replace(/#.*$/, '') !== pending.url.replace(/#.*$/, '')) return;
+  await chrome.storage.session.remove('pendingContinue');
+  if (Date.now() - pending.at < 60000) startReading(tabId, 'page');
 });
 
 // Ensure the rule exists whenever the worker wakes (dynamic rules persist, but cheap to check)

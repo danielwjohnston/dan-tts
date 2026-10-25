@@ -1,7 +1,7 @@
 // End-to-end test of the desktop app against the live voice service.
 //   cd desktop && npm test            (needs a display: on Linux CI use xvfb-run)
 // Optional: PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs, HTTPS_PROXY to reach the internet.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
@@ -19,8 +19,10 @@ const server = createServer((req, res) => {
   const file = req.url.slice(1);
   if (file.endsWith('.pdf')) { res.setHeader('Content-Type', 'application/pdf'); res.end(readFileSync(join(fixtures, file))); return; }
   if (file.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(fixtures, file))); return; }
+  // Named fixture pages (the chapter pages); anything else is the article
+  const page = /^[\w-]+\.html$/.test(file) && existsSync(join(fixtures, file)) ? file : 'article.html';
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.end(readFileSync(join(fixtures, 'article.html')));
+  res.end(readFileSync(join(fixtures, page)));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${server.address().port}`;
@@ -69,6 +71,16 @@ try {
   await win.keyboard.press('Escape');
   await win.waitForSelector('#closed:not([hidden])', { timeout: 5000 });
   check('closing the reader offers a way back', true);
+
+  // 1b. Continue to the next page: the next chapter's link is found when the page is downloaded
+  await win.goto(`app://reader/reader.html?url=${encodeURIComponent(`${origin}/chapter1.html`)}`);
+  await waitActive();
+  check('a web page with a next link offers it at the end of the text', (await shadow(`return root.querySelector('.nextbox .nexttitle')?.textContent;`)) === 'Next chapter');
+  await shadow(`root.querySelector('.nextbox .go').click();`);
+  await win.waitForURL((u) => u.searchParams.get('url') === `${origin}/chapter2.html`, { timeout: 20000 });
+  await waitActive();
+  check('Continue opens the next chapter in the reader and reads it', /behind the atlases/.test(await shadow(`return root.querySelector('.article').innerText;`)), win.url());
+  await win.keyboard.press('Escape');
 
   // 2. Pasted text
   await win.goto('app://reader/home.html');
@@ -142,7 +154,7 @@ try {
   await win.goto('app://reader/home.html');
   await win.waitForSelector('#library li');
   const lib = (await win.textContent('#library')).replace(/\s+/g, ' ');
-  check('library lists the page, text, PDFs and book chapter', (await win.locator('#library li').count()) === 5 && /127\.0\.0\.1/.test(lib) && /Saved text/.test(lib) && /PDF/.test(lib) && /Book/.test(lib), lib.slice(0, 200));
+  check('library lists the page, both chapters, text, PDFs and book chapter', (await win.locator('#library li').count()) === 7 && /127\.0\.0\.1/.test(lib) && /Chapter One/.test(lib) && /Chapter Two/.test(lib) && /Saved text/.test(lib) && /PDF/.test(lib) && /Book/.test(lib), lib.slice(0, 200));
   await win.locator('#library li', { hasText: 'Saved text' }).locator('a').click();
   await waitActive();
   check('reopening saved text resumes it', /Resumed/.test(await shadow(`return root.querySelector('.status').textContent;`)));

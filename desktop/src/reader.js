@@ -25,7 +25,10 @@ function htmlToDoc(html, fallbackTitle, baseUrl) {
   const parts = title.split(/\s+[|·•–—]\s+|\s+-\s+/);
   if (parts.length > 1 && parts[0].length >= 12) title = parts[0];
   if (blocks[0]?.tag === 'h' && blocks[0].text.toLowerCase() === title.toLowerCase()) blocks.shift();
-  return { title, byline, blocks };
+  // A "next chapter"/"next page" link: the reader offers to continue there (any site, since
+  // downloads go through the main process)
+  const next = baseUrl ? danNextLink.find(doc, baseUrl, baseUrl, { sameOrigin: false }) : null;
+  return { title, byline, blocks, next };
 }
 
 function textToDoc(text, title, kind) {
