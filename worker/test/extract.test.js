@@ -29,6 +29,21 @@ test('without <main> or <article>, sidebars, menus and boxes are skipped and the
   for (const bad of ['Log in', 'sidebar', 'Previous', 'Related', 'First!']) assert.ok(!text.includes(bad), `should not contain ${bad}: ${text}`);
 });
 
+test('MediaWiki chrome, hidden elements and buttons inside <main> are skipped', () => {
+  const html = page(`<main><div id="siteSub" class="noprint">From Wikisource</div>
+    <div class="ws-header wst-header ws-noexport noprint"><div>←</div><a href="/toc">Contents</a><span>Chapter 2</span><div>→</div></div>
+    <span role="button" class="oo-ui-buttonElement-button">Download</span>
+    <div class="hatnote" role="note">For other uses, see Library (disambiguation).</div>
+    <p hidden>Hidden paragraph text</p><p aria-hidden="true">Decorative text</p><p style="display:none">Invisible text</p>
+    <span class="sr-only">Skip to content</span>
+    <h2>Chapter one <span class="mw-editsection">[edit]</span></h2>
+    ${story}
+    <div id="catlinks" class="catlinks"><a href="#">Category: Novels</a></div></main>`);
+  const { text } = htmlToText(html);
+  assert.match(text, /^Chapter one\n\nThe story begins/);
+  for (const bad of ['Wikisource', 'Contents', '→', 'Download', 'other uses', 'Hidden', 'Decorative', 'Invisible', 'Skip', 'edit', 'Category']) assert.ok(!text.includes(bad), `should not contain ${bad}: ${text}`);
+});
+
 test('<article> is read when there is no <main>; the first one wins', () => {
   const html = page(`<div class="promo"><p>Buy now</p></div><article><p>One two three four five six.</p></article><article><p>Second article text here.</p></article>`);
   const { text } = htmlToText(html);

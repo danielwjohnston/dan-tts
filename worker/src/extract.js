@@ -29,9 +29,12 @@ const PARA = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pr
 const BLOCK = new Set(['div', 'section', 'article', 'main', 'body', 'html', 'address', 'fieldset', 'form', 'legend', 'td', 'th', 'thead', 'tbody',
   'tfoot', 'dialog', 'center', 'br', 'label', 'option']);
 const KEEP_ROOTS = new Set(['html', 'body', 'main', 'article']);
-// Same hints as the Python server: ids and classes that mark sidebars, menus and boxes
-const CHROME_HINT = /(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc|masthead|site-header|site-footer)([-_]|$)/i;
-const CHROME_ROLE = /navigation|complementary|banner|contentinfo/;
+// The Python server's hints (ids and classes that mark sidebars, menus and boxes), plus the
+// generic markers MediaWiki sites (Wikisource, Wikipedia) and accessibility helpers use for
+// things that aren't the text: print-hidden boxes, hatnotes, category links, "[edit]" links,
+// screen-reader-only labels
+const CHROME_HINT = /(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc|masthead|site-header|site-footer|noprint|noexport|hatnote|catlinks|printfooter|editsection|sitesub|contentsub|indicators|skip-link|sr-only|visually-hidden|screen-reader-text)([-_]|$)/i;
+const CHROME_ROLE = /navigation|complementary|banner|contentinfo|button|menu|menubar|toolbar|search|dialog|tooltip|tablist|note/;
 const META_KEYS = ['og:description', 'description', 'twitter:description'];
 
 // Latin-1 letters &Agrave; … &yuml; are code points 192–255 in this order (× and ÷ aside)
@@ -120,6 +123,8 @@ function parseAttrs(html, pos) {
 
 const isChrome = (name, attrs) => {
   if (CHROME_ROLE.test(attrs.role || '')) return true;
+  // Not shown to sighted readers either: hidden, aria-hidden, display:none, or marked as not-content
+  if ('hidden' in attrs || attrs['aria-hidden'] === 'true' || 'data-nosnippet' in attrs || /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i.test(attrs.style || '')) return true;
   if (KEEP_ROOTS.has(name)) return false;
   const tokens = [attrs.id || '', ...(attrs.class || '').split(/\s+/)];
   return tokens.some((t) => t && CHROME_HINT.test(t));
