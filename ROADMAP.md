@@ -8,8 +8,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Paragraph chunking**~~ — Done: long text is split into paragraphs and synthesized in sequence with a progress bar
 - ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
-- **Cleaner "Load from URL"** — `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. Use Readability-style extraction like the extension does
-- ~~**"Load from URL" on the Cloudflare Worker**~~ — Done: `worker/src/extract.js`, a dependency-free extractor with the Python server's rules (including the sidebar/menu stripping) and limits
+- **Cleaner "Load from URL"** (Python server) — `app/main.py`'s `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. PR #29 adds sidebar/menu stripping there. The Worker (the tester's default API) already skips sidebars, menus, MediaWiki boxes and hidden elements; port its rules to Python so both servers read the same text
+- ~~**"Load from URL" on the Cloudflare Worker**~~ — Done: `worker/src/extract.js`, a dependency-free extractor with the Python server's limits and messages, plus sidebar/menu/box, MediaWiki and hidden-element stripping
 - ~~**Test speech on the deployed Worker**~~ — Done (2026-10-25): `/synthesize` and `/synthesize_with_timing` return real audio and word timings from Cloudflare's servers
 - ~~**Make the Worker the tester's default API**~~ — Done: the tester defaults to the Worker, uses its own server when served by one, and greys out the formats the Worker can't produce
 - ~~**One Cloudflare deploy path**~~ — Done: Cloudflare's Git builds only; the Actions deploy workflow is gone

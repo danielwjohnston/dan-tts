@@ -152,3 +152,52 @@ test('decodes the charset from the Content-Type header or a <meta charset>', asy
   const r2 = await extractText('https://example.com/', { fetchImpl: async () => new Response(sniffed, { headers: { 'content-type': 'text/html' } }) });
   assert.match(r2.text, /^café au lait/);
 });
+
+// ---- from the adversarial review ----
+test('badly nested or unclosed pages stay linear: 100k stray end tags well under a second', () => {
+  for (const html of ['<body><ul>' + '<li>item text</p>'.repeat(100000) + '</ul></body>', '<body><span>' + '<div>x'.repeat(50000) + '</span>'.repeat(50000) + '</body>',
+    '<body><table>' + '<tr><td>cell</font>'.repeat(40000) + '</table></body>', '<body>' + '<p>text</br>'.repeat(100000) + '</body>']) {
+    const t0 = Date.now();
+    const { text } = htmlToText(html);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1500, `${html.slice(0, 30)}… took ${ms} ms`);
+    assert.ok(text.length > 50000, 'text was kept');
+  }
+});
+
+test('implied end tags: p, li, dt/dd, tr/td and option close themselves like in a browser', () => {
+  assert.strictEqual(htmlToText('<body><p>one<p>two<div>three</div><p>four</body>').text, 'one\n\ntwo\n\nthree\n\nfour');
+  assert.strictEqual(htmlToText('<body><ul><li>a<li>b<ul><li>c</ul><li>d</ul></body>').text, 'a\n\nb\n\nc\n\nd');
+  assert.strictEqual(htmlToText('<body><dl><dt>t1<dd>d1<dt>t2<dd>d2</dl></body>').text, 't1\n\nd1\n\nt2\n\nd2');
+  assert.strictEqual(htmlToText('<body><table><tr><td>a<td>b<tr><td>c<th>d</table></body>').text, 'a\nb\n\nc\nd');
+  // and an unmatched end tag is simply ignored, without closing anything
+  assert.strictEqual(htmlToText('<body><main><p>kept text here</span></font></p></main></body>').text, 'kept text here');
+});
+
+test('entities named like Object.prototype members are left alone', () => {
+  assert.strictEqual(decodeEntities('x &constructor; &toString; &hasOwnProperty; y &amp; z'), 'x &constructor; &toString; &hasOwnProperty; y & z');
+  assert.strictEqual(htmlToText('<main><p constructor="1" hidden>gone</p><p>one two three four five &valueOf; six</p></main>').text, 'one two three four five &valueOf; six');
+});
+
+test('a </script> inside a commented document.write does not end the script', () => {
+  const html = "<body><script><!--\ndocument.write('<script src=\"x\"></script>');\n//--></script><p>alpha beta gamma delta epsilon</p>"
+    + '<script>var a = "<!-- not a comment";</script><p>zeta</p></body>';
+  assert.strictEqual(htmlToText(html).text, 'alpha beta gamma delta epsilon\n\nzeta');
+  assert.strictEqual(htmlToText('<body><script>unterminated<p>x</body>').text, '');
+});
+
+test('only the special-purpose /24s are blocked, not whole /16s around them', async () => {
+  const never = async () => { throw new Error('should not fetch'); };
+  for (const url of ['http://192.0.0.1/', 'http://192.0.2.1/', 'http://198.51.100.1/', 'http://203.0.113.1/', 'http://198.18.0.1/', 'http://100.64.0.1/']) {
+    await rejects(extractText(url, { fetchImpl: never }), 400, /not allowed/);
+  }
+  for (const url of ['https://192.0.78.24/', 'http://192.0.1.1/', 'http://198.51.1.1/', 'http://203.0.1.1/', 'http://100.63.0.1/']) {
+    await rejects(extractText(url, { fetchImpl: never }), 502, /should not fetch/); // got as far as fetching
+  }
+});
+
+test("Cloudflare's own 52x/530 statuses are reported as fetch errors, not as the site's answer", async () => {
+  await rejects(extractText('exmaple.example', { fetchImpl: async () => new Response('error code: 1016', { status: 530 }) }), 400, /^Could not resolve URL host$/);
+  await rejects(extractText('https://expired.example/', { fetchImpl: async () => new Response('', { status: 526 }) }), 502, /^Failed to fetch URL: the site has an invalid certificate$/);
+  await rejects(extractText('https://down.example/', { fetchImpl: async () => new Response('', { status: 522 }) }), 502, /connection timed out/);
+});

@@ -42,6 +42,17 @@ test('works with sockets that are already open (Cloudflare Workers)', async () =
   assert.deepStrictEqual(Array.from(r.audio), [9]);
 });
 
+test('a socket that errors again when closed rejects once, with the first error', async () => {
+  let closes = 0;
+  const openSocket = () => {
+    const ws = { readyState: 0, send() {}, close() { closes++; ws.onerror?.({ message: 'closed before established' }); ws.onclose?.({ code: 1006 }); } };
+    setTimeout(() => ws.onerror({ message: 'handshake refused' }), 0);
+    return ws;
+  };
+  await assert.rejects(synthesize('Hi', { openSocket }), /handshake refused/);
+  assert.strictEqual(closes, 1);
+});
+
 test('rejects when no audio arrives', async () => {
   await assert.rejects(synthesize('Hi', { openSocket: fakeSocket([textFrame('turn.end', '{}')]) }), /No audio/);
 });

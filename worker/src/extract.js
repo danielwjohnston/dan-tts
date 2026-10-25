@@ -1,8 +1,10 @@
 // Load from URL on the Worker: fetch a page and pull out its readable text. There is no DOM
-// here and no dependencies, so this is a small, tolerant HTML tokenizer. It follows the same
-// rules as the Python server's /extract_text (what gets dropped, which element is read, the
-// meta-description fallback) and returns the same shape and error messages, so the tester
-// behaves the same against either server.
+// here and no dependencies, so this is a small, tolerant HTML tokenizer (linear time, implied
+// end tags for p/li/dt/dd/tr/td/option, the escaped-script rules of the HTML spec). It keeps
+// the Python server's rules (which element is read, the meta-description fallback, limits and
+// error messages, so the tester behaves the same against either server) and goes further on
+// what is dropped: sidebars, menus and boxes (as the Load from URL cleanup, PR #29, proposes
+// for the Python server), MediaWiki chrome, hidden elements and form controls.
 
 export const MAX_FETCH_BYTES = 5 * 1024 * 1024;
 export const MAX_REDIRECTS = 5;
@@ -29,6 +31,10 @@ const PARA = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pr
 const BLOCK = new Set(['div', 'section', 'article', 'main', 'body', 'html', 'address', 'fieldset', 'form', 'legend', 'td', 'th', 'thead', 'tbody',
   'tfoot', 'dialog', 'center', 'br', 'label', 'option']);
 const KEEP_ROOTS = new Set(['html', 'body', 'main', 'article']);
+// Start tags that close an open <p> (the HTML parser's "close a p element" rule)
+const CLOSES_P = new Set(['address', 'article', 'aside', 'blockquote', 'details', 'dialog', 'div', 'dl', 'fieldset', 'figcaption', 'figure', 'footer',
+  'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'search', 'section', 'table', 'ul',
+  'li', 'dd', 'dt']);
 // The Python server's hints (ids and classes that mark sidebars, menus and boxes), plus the
 // generic markers MediaWiki sites (Wikisource, Wikipedia) and accessibility helpers use for
 // things that aren't the text: print-hidden boxes, hatnotes, category links, "[edit]" links,
@@ -59,7 +65,7 @@ const CP1252 = { 128: '€', 130: '‚', 131: 'ƒ', 132: '„', 133: '…', 134:
 export function decodeEntities(s) {
   if (!s.includes('&')) return s;
   return s.replace(/&(?:#[xX]([0-9a-fA-F]{1,6})|#(\d{1,7})|([a-zA-Z][a-zA-Z0-9]{1,31}));?/g, (m, hex, dec, name) => {
-    if (name) return m.endsWith(';') && name in ENTITIES ? ENTITIES[name] : m;
+    if (name) return m.endsWith(';') && Object.hasOwn(ENTITIES, name) ? ENTITIES[name] : m;
     const code = hex ? parseInt(hex, 16) : Number(dec);
     if (code in CP1252) return CP1252[code];
     if (!code || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return '�';
@@ -87,7 +93,7 @@ class Sink {
 
 function parseAttrs(html, pos) {
   // From just after the tag name to the closing '>', honoring quotes. Returns [attrs, end, selfClosing]
-  const attrs = {};
+  const attrs = Object.create(null); // so "constructor" or "hidden" attributes can't collide with Object's
   const n = html.length;
   while (pos < n) {
     while (pos < n && /\s/.test(html[pos])) pos++;
@@ -121,6 +127,24 @@ function parseAttrs(html, pos) {
   return [attrs, n, false];
 }
 
+// Where a <script> really ends: inside an HTML comment that itself contains "<script", a
+// "</script>" belongs to the script (the old document.write('<script …></script>') trick),
+// per the tokenizer's escaped and double-escaped script states.
+function scriptEnd(html, from) {
+  const re = /<!--|-->|<script\b|<\/script\s*>/ig;
+  re.lastIndex = from;
+  let escaped = false, double = false;
+  for (let m; (m = re.exec(html));) {
+    const t = m[0].toLowerCase();
+    if (t === '<!--') escaped = true;
+    else if (t === '-->') { escaped = false; double = false; }
+    else if (t.startsWith('<script')) { if (escaped) double = true; }
+    else if (double) double = false;
+    else return m;
+  }
+  return null;
+}
+
 const isChrome = (name, attrs) => {
   if (CHROME_ROLE.test(attrs.role || '')) return true;
   // Not shown to sighted readers either: hidden, aria-hidden, display:none, or marked as not-content
@@ -139,6 +163,7 @@ export function htmlToText(html) {
   const body = new Sink();
   let main = null, article = null;
   const stack = []; // open elements: { name, drop, capture }
+  const openIdx = new Map(); // name -> stack indexes of the open elements with that name, ascending
   let dropDepth = 0;
   let title = null;
   const metas = {};
@@ -154,11 +179,21 @@ export function htmlToText(html) {
     const b = breakFor(el.name);
     if (b) emitBreak(b);
   };
-  const closeTo = (name) => {
-    let idx = stack.length - 1;
-    while (idx >= 0 && stack[idx].name !== name) idx--;
-    if (idx < 0) return;
-    while (stack.length > idx) close(stack.pop());
+  // Every push and pop is O(1), so a page full of stray or omitted end tags stays linear
+  const lastOpen = (name) => { const a = openIdx.get(name); return a && a.length ? a[a.length - 1] : -1; };
+  const push = (el) => { let a = openIdx.get(el.name); if (!a) openIdx.set(el.name, a = []); a.push(stack.length); stack.push(el); };
+  const pop = () => { const el = stack.pop(); openIdx.get(el.name).pop(); close(el); };
+  const closeTo = (name) => { const idx = lastOpen(name); if (idx < 0) return; while (stack.length > idx) pop(); };
+  const deepest = (...names) => Math.max(-1, ...names.map(lastOpen));
+  // End tags the HTML parser supplies itself when the next start tag implies them
+  const impliedEnd = (name) => {
+    if (CLOSES_P.has(name) && lastOpen('p') > deepest('button', 'table', 'td', 'th', 'caption', 'template')) closeTo('p');
+    if (name === 'li' && lastOpen('li') > deepest('ul', 'ol', 'menu')) closeTo('li');
+    if ((name === 'dt' || name === 'dd') && deepest('dt', 'dd') > lastOpen('dl')) closeTo(lastOpen('dt') > lastOpen('dd') ? 'dt' : 'dd');
+    if (name === 'tr' && lastOpen('tr') > lastOpen('table')) closeTo('tr');
+    if ((name === 'td' || name === 'th') && deepest('td', 'th') > deepest('tr', 'table')) closeTo(lastOpen('td') > lastOpen('th') ? 'td' : 'th');
+    if ((name === 'thead' || name === 'tbody' || name === 'tfoot') && deepest('thead', 'tbody', 'tfoot') > lastOpen('table')) closeTo(['thead', 'tbody', 'tfoot'].sort((x, y) => lastOpen(y) - lastOpen(x))[0]);
+    if (name === 'option' && lastOpen('option') > lastOpen('select')) closeTo('option');
   };
 
   let i = 0;
@@ -197,7 +232,7 @@ export function htmlToText(html) {
     }
     if (RAW.has(name) && !selfClosing) {
       const endRe = new RegExp(`</${name}\\s*>`, 'ig'); endRe.lastIndex = i;
-      const e = endRe.exec(html);
+      const e = name === 'script' ? scriptEnd(html, i) : endRe.exec(html);
       const raw = html.slice(i, e ? e.index : n);
       i = e ? e.index + e[0].length : n;
       if (name === 'title' && title === null && !dropDepth) title = decodeEntities(raw).replace(/\s+/g, ' ').trim();
@@ -211,6 +246,7 @@ export function htmlToText(html) {
       else emitText(' ');
       continue;
     }
+    impliedEnd(name);
     const el = { name, drop, capture: null };
     if (drop) { emitBreak(breakFor(name)); dropDepth++; }
     else {
@@ -219,9 +255,9 @@ export function htmlToText(html) {
       if (!dropDepth && name === 'main' && !main) el.capture = main = new Sink();
       else if (!dropDepth && name === 'article' && !article) el.capture = article = new Sink();
     }
-    stack.push(el);
+    push(el);
   }
-  while (stack.length) close(stack.pop());
+  while (stack.length) pop();
 
   const description = META_KEYS.map((k) => metas[k]).find(Boolean) || '';
   const text = (main || article || body).toString();
@@ -235,8 +271,9 @@ const ipv4 = (host) => {
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   return m ? m.slice(1).map(Number) : null;
 };
-const privateV4 = ([a, b]) => a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
-  || (a === 172 && b >= 16 && b <= 31) || (a === 192 && (b === 0 || b === 168)) || (a === 198 && (b === 18 || b === 19 || b === 51)) || (a === 203 && b === 0) || a >= 224;
+const privateV4 = ([a, b, c]) => a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+  || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19))
+  || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || a >= 224;
 // The eight 16-bit groups of an IPv6 address (as the URL parser serializes it), or null
 function ipv6Groups(host) {
   if (!/^[0-9a-f:.]+$/i.test(host) || !host.includes(':')) return null;
@@ -283,6 +320,9 @@ function decodeBody(bytes, contentType) {
   try { return new TextDecoder(charset || 'utf-8').decode(bytes); } catch { return new TextDecoder().decode(bytes); }
 }
 
+const CF_REASONS = { 520: 'the site sent an invalid response', 521: 'the web server is down', 522: 'the connection timed out', 523: 'the site is unreachable',
+  524: 'the site took too long to respond', 525: 'TLS handshake failed', 526: 'the site has an invalid certificate' };
+
 /** Fetches a page as text, following redirects one hop at a time so each hop is checked. */
 export async function fetchHtml(url, { fetchImpl = globalThis.fetch } = {}) {
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -299,6 +339,10 @@ export async function fetchHtml(url, { fetchImpl = globalThis.fetch } = {}) {
       try { url = new URL(location, u).toString(); } catch { throw new HttpError(502, 'URL returned an invalid redirect'); }
       continue;
     }
+    // On Cloudflare a subrequest that can't reach the site doesn't reject: it resolves with one of
+    // Cloudflare's own 52x/530 statuses. Report those like the Python server reports its errors.
+    if (res.status === 530) throw new HttpError(400, 'Could not resolve URL host');
+    if (res.status >= 520 && res.status <= 529) throw new HttpError(502, `Failed to fetch URL: ${CF_REASONS[res.status] || 'the site could not be reached'}`);
     if ([401, 403, 429].includes(res.status)) {
       throw new HttpError(502, `${u.hostname} blocked automated access (HTTP ${res.status}). Open the page in your browser and paste the text instead.`);
     }

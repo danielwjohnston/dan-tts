@@ -418,14 +418,17 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     }
 
     /* ---- Load voices ---- */
+    const currentApi = () => document.getElementById('api').value.trim().replace(/\/$/, '');
     async function loadVoices(refresh = false) {
-      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      const api = currentApi();
       logEl.textContent = refresh ? 'Refreshing voices...' : 'Loading voices...';
       probeServer(api);
       try {
         const res = await fetch(`${api}/voices${refresh ? '?refresh=1' : ''}`);
+        if (api !== currentApi()) return; // the field changed meanwhile: a newer request reports instead
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         allVoices = await res.json();
+        if (api !== currentApi()) return;
         voiceSelect.innerHTML = '';
         allVoices.forEach(v => {
           const opt = document.createElement('option');
@@ -443,6 +446,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         renderGrid();
         logEl.textContent = allVoices.length ? 'Voices loaded.' : 'No voices returned.';
       } catch (err) {
+        if (api !== currentApi()) return;
         console.error(err);
         logEl.textContent = 'Error loading voices: ' + err.message;
       }
@@ -960,12 +964,18 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 
     /* ---- Init ---- */
     // Served by a dan-tts server (the Worker, or a local Python server)? Then that server is the
-    // API. Opened as a file or from GitHub Pages, the default above (the Worker) applies.
-    if (/^https?:$/.test(location.protocol) && !/\.github\.io$/i.test(location.hostname)) {
-      document.getElementById('api').value = location.origin;
-    }
-    document.getElementById('api').addEventListener('change', () => loadVoices());
-    loadVoices();
+    // API. From a plain static host, a file or GitHub Pages, the default above (the Worker) applies.
+    (async () => {
+      const apiInput = document.getElementById('api');
+      if (/^https?:$/.test(location.protocol) && !/\.github\.io$/i.test(location.hostname)) {
+        try {
+          const res = await fetch(`${location.origin}/health`);
+          if (res.ok && (await res.json()).status === 'ok') apiInput.value = location.origin;
+        } catch (e) { /* not a dan-tts server: keep the default */ }
+      }
+      apiInput.addEventListener('change', () => loadVoices());
+      loadVoices();
+    })();
   </script>
 </body>
 </html>

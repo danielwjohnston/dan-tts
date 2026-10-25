@@ -40,13 +40,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -o pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          number=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -n1)
+          # If the lookup itself fails, fail this step (set -e) rather than open a duplicate issue
+          numbers=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number")
+          number=${numbers%%$'\n'*}
           {
             echo "The scheduled check failed on $(date -u '+%Y-%m-%d %H:%M UTC') ([run]($run_url))."
             echo
             echo '```'
-            tail -n 40 check.log
+            tail -n 60 check.log
             echo '```'
             echo
             echo "What to do: run \`node scripts/edge-health.mjs\` locally. If the direct checks fail, Microsoft changed the endpoint or token scheme: update \`engine/src/drm.js\` and \`engine/src/tts.js\` from the latest [edge-tts](https://github.com/rany2/edge-tts) and refresh the token test vectors. If only the Worker checks fail, see \`worker/README.md\`. This issue closes itself when the check passes again."
@@ -63,8 +66,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -o pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          for number in $(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number"); do
+          numbers=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number")
+          for number in $numbers; do
             gh issue close "$number" --comment "Recovered: the check passed on $(date -u '+%Y-%m-%d %H:%M UTC') ([run]($run_url))."
           done
 
