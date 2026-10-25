@@ -1,5 +1,5 @@
 # dan-tts API on Cloudflare Workers (free plan): same endpoints as the Python server,
-# minus /extract_text and non-MP3 formats. This file is for local `wrangler dev` of the API only;
+# minus the non-MP3 formats. This file is for local `wrangler dev` of the API only;
 # deploys use the root wrangler.jsonc, which adds the static front end (deploying from here would drop it).
 name = "dan-tts"
 main = "src/index.js"

@@ -9,18 +9,18 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
 - **Cleaner "Load from URL"** — `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. Use Readability-style extraction like the extension does
-- **"Load from URL" on the Cloudflare Worker** — the Worker's `/extract_text` returns 501, so the button only works against the Render/FastAPI backend
-- **Test speech on the deployed Worker** — `/health` and `/voices` work at `dan-tts.macdaddydwj.workers.dev`, but `/synthesize` hasn't been tried there yet. Microsoft's voice service may treat Cloudflare's servers differently (see `worker/README.md`). Run one synthesis from the tester
-- **Make the Worker the tester's default API** — `tester.html` still defaults to `https://dan-tts.onrender.com`, which sleeps when idle. Once the speech test passes, default to the Worker; when the tester is served by the Worker itself, use its own address
-- **One Cloudflare deploy path** — the dashboard's Git builds already deploy every push to `main`, and `.github/workflows/deploy-worker.yml` would deploy again if its secrets were added. Decide which to keep (Git builds are simpler) and remove the other
-- **Update `worker/README.md`** — its setup steps (API token, GitHub secrets, Actions) predate the Git-connected deploy and the combined site + API Worker in the root `wrangler.jsonc`
-- **Skip the Python install in Cloudflare builds** — each build runs `pip install -r requirements.txt` (about 10s) because `requirements.txt` is at the repo root; the Worker doesn't use it. Turn it off with a build variable in the dashboard (check Cloudflare's docs for the current name)
+- ~~**"Load from URL" on the Cloudflare Worker**~~ — Done: `worker/src/extract.js`, a dependency-free extractor with the Python server's rules (including the sidebar/menu stripping) and limits
+- ~~**Test speech on the deployed Worker**~~ — Done (2026-10-25): `/synthesize` and `/synthesize_with_timing` return real audio and word timings from Cloudflare's servers
+- ~~**Make the Worker the tester's default API**~~ — Done: the tester defaults to the Worker, uses its own server when served by one, and greys out the formats the Worker can't produce
+- ~~**One Cloudflare deploy path**~~ — Done: Cloudflare's Git builds only; the Actions deploy workflow is gone
+- ~~**Update `worker/README.md`**~~ — Done
+- **Skip the Python install in Cloudflare builds** — a dashboard setting, so it can't be done from the repo: add the build variable `SKIP_DEPENDENCY_INSTALL` = `1` (steps in `worker/README.md`). Saves about 10 s per build
 - ~~**Desktop app releases**~~ — Done: pushing a `desktop-v<version>` tag publishes a GitHub Release with the installers. Auto-update builds on this
 - ~~**Books in the desktop app**~~ — Done: "Find books" on the home screen, and EPUB links and files open as books
 - ~~**Open any EPUB link or file**~~ — Done: paste an EPUB link into the Books search box, or open an EPUB file, in the extension and the desktop app
 - ~~**Run the extension's end-to-end tests in CI**~~ — Done: CI runs the Chromium and Firefox tests on every change
 - **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
-- **Edge endpoint health check** — a scheduled job calls the voices list and a short synthesis, and alerts on failure. The engine depends on an unofficial endpoint and a token pinned in `engine/src/drm.js`; CI tests are offline, so nothing else would catch a change
+- ~~**Edge endpoint health check**~~ — Done: `.github/workflows/edge-health.yml` runs `scripts/edge-health.mjs` every six hours (voice list and a short synthesis, from Node and through the Worker) and keeps a GitHub issue open while it fails
 - **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
 
 ## Medium-Term
