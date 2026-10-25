@@ -46,7 +46,7 @@
     const hasLetter = (x) => /\p{L}/u.test(x);
     let rest = own.replace(LEAD, '').trim();
     if (!hasLetter(rest)) rest = own.replace(/^next\b\s*[:\-–—]?\s*/i, '').trim();
-    if (hasLetter(rest)) own = rest;
+    if (hasLetter(rest) && !/^(page|chapter|part|section|post|article|episode|entry|story|installment)$/i.test(rest)) own = rest; // "Next chapter" stays as it is
     const alt = (el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(ARROWS, '').trim();
     const best = own && !/^\W*$/.test(own) ? own : alt;
     if (best) return best.slice(0, 80);
