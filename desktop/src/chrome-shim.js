@@ -82,7 +82,16 @@
   window.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
     if (/^https?:/i.test(url) && !/^https:\/\/(speech\.platform\.bing\.com|cdn\.jsdelivr\.net)\//.test(url) && (!init || !init.method || init.method === 'GET')) {
-      const r = await window.danDesktop.fetch(url);
+      let r;
+      try {
+        r = await window.danDesktop.fetch(url);
+      } catch (err) {
+        // Like a browser's fetch: a network failure is a TypeError, with a readable message
+        // instead of "Error invoking remote method 'dan:fetch': Error: net::ERR_TIMED_OUT"
+        const raw = String(err.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+        const why = { ERR_TIMED_OUT: 'the connection timed out', ERR_NAME_NOT_RESOLVED: 'that address wasn’t found', ERR_INTERNET_DISCONNECTED: 'you’re offline', ERR_CONNECTION_REFUSED: 'the connection was refused' }[raw.match(/net::(\w+)/)?.[1]];
+        throw new TypeError(why ? `Couldn’t reach ${new URL(url).hostname}: ${why}. Check your connection and try again.` : raw);
+      }
       return new Response(r.body, { status: r.status, headers: { 'Content-Type': r.contentType } });
     }
     return nativeFetch(input, init);

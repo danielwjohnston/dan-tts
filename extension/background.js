@@ -58,6 +58,12 @@ async function ensureOffscreen() {
 // ---- Start reading in a tab ----
 let activeTabId = null;
 let activeIsExtensionPage = false; // the PDF reader page hears the player directly
+let activeIsBook = false; // a book chapter page: messages go to it tagged with its tab id
+
+// Book chapters are extension pages, which content scripts can't be injected into, so they
+// get the reader scripts from their own page and runtime messages tagged with the tab id.
+const BOOK_PAGE = chrome.runtime.getURL('book.html');
+const sendToBook = (msg) => chrome.runtime.sendMessage({ ...msg, tabId: activeTabId }).catch(() => {});
 
 const READER_URL = chrome.runtime.getURL('pdf-reader.html');
 // Same hand-off as the web app's bookmarklet: text travels in the #fragment, which never reaches the server
@@ -81,7 +87,15 @@ async function sendToWebApp(tab, selectionText) {
 }
 const isPdfUrl = (url) => /^(https?|file):/.test(url || '') && /\.pdf($|[?#])/i.test(url);
 
-export async function startReading(tabId, mode = 'auto') {
+export async function startReading(tabId, mode = 'auto', bookPage = false) {
+  if (bookPage) {
+    if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
+    activeTabId = tabId;
+    activeIsBook = true;
+    activeIsExtensionPage = true;
+    sendToBook({ event: 'start', mode });
+    return;
+  }
   // The browser's PDF viewer can't be scripted: open the PDF in dan-tts' own reader instead
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (tab && isPdfUrl(tab.url)) {
@@ -101,16 +115,17 @@ export async function startReading(tabId, mode = 'auto') {
   if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
   activeTabId = tabId;
   activeIsExtensionPage = false;
+  activeIsBook = false;
   chrome.tabs.sendMessage(tabId, { event: 'start', mode });
 }
 
-chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto'));
+chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto', tab.url?.startsWith(BOOK_PAGE)));
 chrome.commands.onCommand.addListener((command, tab) => { if (command === 'read' && tab) startReading(tab.id, 'auto'); });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'open-library') { chrome.tabs.create({ url: chrome.runtime.getURL('library.html') }); return; }
   if (info.menuItemId === 'open-pdf') { chrome.tabs.create({ url: READER_URL }); return; }
   if (info.menuItemId === 'send-to-web') { if (tab) sendToWebApp(tab, info.selectionText).catch(console.error); return; }
-  if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page');
+  if (tab) startReading(tab.id, info.menuItemId === 'read-selection' ? 'selection' : 'page', tab.url?.startsWith(BOOK_PAGE));
 });
 chrome.tabs.onRemoved.addListener((tabId) => { if (tabId === activeTabId) { sendToPlayer({ cmd: 'stop' }); activeTabId = null; } });
 
@@ -140,6 +155,7 @@ async function getVoices() {
 // player's broadcasts directly; with the inline (Firefox) player they need forwarding.
 function relayToTab(msg) {
   if (activeTabId === null) return;
+  if (activeIsBook) { sendToBook(msg); return; }
   if (activeIsExtensionPage) {
     if (!chrome.offscreen) chrome.runtime.sendMessage(msg).catch(() => {});
     return;
@@ -151,10 +167,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target === 'player' && sender.tab) {
     activeTabId = sender.tab.id;
     activeIsExtensionPage = (sender.url || '').startsWith(chrome.runtime.getURL(''));
+    activeIsBook = (sender.url || '').startsWith(BOOK_PAGE);
     sendToPlayer(msg).then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
   }
   if (msg.target === 'tab') { relayToTab(msg); return false; }
+  // The book page asks to read itself: it is a tab like any other, so the page reader applies
+  if (msg.target === 'background' && msg.cmd === 'read-tab' && sender.tab) {
+    startReading(sender.tab.id, 'page', true);
+    return false;
+  }
   // Pages ping this while reading: Firefox suspends idle background pages (~30 s), which
   // would stop audio played here. Harmless in Chrome.
   if (msg.target === 'background' && msg.cmd === 'keepalive') { sendResponse({ ok: true }); return false; }
