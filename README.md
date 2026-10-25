@@ -49,9 +49,12 @@ curl -X POST http://127.0.0.1:8000/synthesize \
 
 Change `format` to `m4a`, `ogg`, or `flac` (requires ffmpeg). Default voice: `en-US-AriaNeural`.
 
-## HTML tester (local)
+## HTML tester
 
-Open `tester.html` in a browser. Set API base to your server (default `http://localhost:8000`).
+Open `tester.html` in a browser, or visit https://dan-tts.macdaddydwj.workers.dev/tester.html. It talks to the
+Cloudflare Worker by default (MP3 only); when the page is served by a dan-tts server (the Worker, or
+`uvicorn` locally) it uses that server. **Advanced → API Base URL** switches servers, e.g. `http://localhost:8000`
+for m4a/ogg/flac.
 
 ## Docker (optional)
 
@@ -72,15 +75,16 @@ docker run --rm -p 8000:8000 dan-tts
 The static front end (`demo.html`, `tester.html`, `static/`, `samples/`) is deployed to GitHub Pages by
 `.github/workflows/pages.yml` on every push to `main`. Enable it once under **Settings → Pages → Source: GitHub Actions**.
 The site will be at `https://danielwjohnston.github.io/dan-tts/`. Pages is static-only, so synthesis in
-`tester.html` still needs the FastAPI server running somewhere — set the "API Base URL" field to it.
+`tester.html` goes to the Cloudflare Worker (the default API), or to any server set in "API Base URL".
 
 ## Free backend hosting
 
-Two free options: **Cloudflare Workers** (never sleeps; see [`worker/`](worker/) for a 10-minute browser-only setup) or **Render** (below).
+Two free options: **Cloudflare Workers** (never sleeps, MP3 only, Load from URL included; see [`worker/`](worker/)) or
+**Render** (below, sleeps when idle, but has ffmpeg for m4a/ogg/flac).
 
 The Cloudflare deploy is configured by the root `wrangler.jsonc`: one Worker serves the API from `worker/` and the
-front end (`demo.html` at `/`, `tester.html`, `static/`, `samples/`) as static assets. Its build step assembles
-`_site/`, so a Cloudflare Git build needs only the deploy command `npx wrangler deploy` from the repo root.
+front end (`demo.html` at `/`, `tester.html`, `static/`, `samples/`) as static assets. Cloudflare's Git builds deploy it
+on every push to `main` and preview every other branch; the build step assembles `_site/` and runs `npx wrangler deploy`.
 
 ### Render
 
@@ -98,6 +102,11 @@ Free services sleep after ~15 minutes idle; the first request afterwards takes ~
 pip install -r requirements-dev.txt
 python -m pytest -q
 node --test tests/chunk-text.test.js tests/bundle.test.js   # chunker, zip/SRT
+node --test worker/test/*.test.js                           # Cloudflare Worker routes and Load from URL
 ```
 
 Edge TTS and outbound HTTP are stubbed, so the suites run offline. CI runs it on every PR.
+
+The voice service itself is unofficial, so `.github/workflows/edge-health.yml` checks it every six hours (voice list
+and a short synthesis, from Node and through the Worker) and opens a GitHub issue when it stops working:
+`node scripts/edge-health.mjs` runs the same check by hand.
