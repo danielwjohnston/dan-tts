@@ -31,7 +31,9 @@
   ],
   "host_permissions": [
     "https://speech.platform.bing.com/*",
-    "wss://speech.platform.bing.com/*"
+    "wss://speech.platform.bing.com/*",
+    "https://archive.org/*",
+    "https://*.archive.org/*"
   ],
   "commands": {
     "read": {
@@ -44,5 +46,8 @@
   "optional_host_permissions": [
     "https://*/*",
     "http://*/*"
-  ]
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
 }

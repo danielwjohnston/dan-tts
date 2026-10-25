@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https://speech.platform.bing.com wss://speech.platform.bing.com https://cdn.jsdelivr.net blob: data:">
+  <title>dan-tts Reader</title>
+  <link rel="stylesheet" href="desktop.css">
+  <script src="chrome-shim.js"></script>
+</head>
+<body>
+  <div class="topbar"><a href="home.html">← Home</a><span class="status" id="status" role="status" style="margin:0"></span></div>
+  <main id="closed" hidden>
+    <p class="sub">Reader closed. <a href="home.html">Back to home</a>, or <a href="#" id="reopen">keep reading</a>.</p>
+  </main>
+  <script src="lib/Readability.js"></script>
+  <script src="lib/chunk-text.js"></script>
+  <script src="lib/align.js"></script>
+  <script type="module" src="reader.js"></script>
+</body>
+</html>

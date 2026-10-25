@@ -23,6 +23,7 @@ const pdfs = {}; // filled after launch: generated with Chromium so no binaries 
 const server = createServer((req, res) => {
   const name = req.url.slice(1);
   if (pdfs[name]) { res.setHeader('Content-Type', 'application/pdf'); res.end(pdfs[name]); return; }
+  if (name.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(here, 'fixtures', name))); return; }
   res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(join(here, 'fixtures', 'article.html')));
 }).listen(0);
 const origin = `http://127.0.0.1:${server.address().port}`;
@@ -32,13 +33,18 @@ const check = (name, ok, detail = '') => { results.push({ name, ok }); console.l
 
 const ctx = await chromium.launchPersistentContext('', {
   executablePath: process.env.CHROMIUM_PATH || undefined,
+  // Extensions need full Chromium: Playwright's default headless browser (headless shell)
+  // can't load them, and the test would time out waiting for the service worker
+  channel: process.env.CHROMIUM_PATH ? undefined : 'chromium',
   headless: true,
   args: ['--headless=new', `--disable-extensions-except=${ext}`, `--load-extension=${ext}`, '--autoplay-policy=no-user-gesture-required',
     // Behind an HTTPS proxy (CI sandboxes), keep the local fixture server off the proxy
     ...(process.env.HTTPS_PROXY ? [`--proxy-server=${process.env.HTTPS_PROXY}`, '--proxy-bypass-list=127.0.0.1;localhost'] : [])],
 });
 try {
-  let [first] = ctx.serviceWorkers(); if (!first) first = await ctx.waitForEvent('serviceworker');
+  // Chromium's built-in extensions have service workers too: find ours by its script
+  const ours = (w) => w.url().startsWith('chrome-extension://') && w.url().endsWith('/background.js');
+  const first = ctx.serviceWorkers().find(ours) || await ctx.waitForEvent('serviceworker', { predicate: ours });
   const extId = new URL(first.url()).host;
   // MV3 workers stop when idle and restart on demand, and other components (the PDF
   // viewer) have workers too, so always look ours up fresh
@@ -67,8 +73,10 @@ try {
   check('Readability removed nav, sidebar, newsletter and footer',
     !/Subscribe now|Trending|newsletter|Cookie settings/i.test(articleText), (articleText.match(/.{0,40}(Subscribe now|Trending|newsletter|Cookie settings).{0,40}/i) || [''])[0]);
 
-  // 2. Highlighting advances through words
-  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 30000 });
+  // 2. Highlighting advances through words. The first speech also starts the offscreen
+  // player and the voice connection, so allow longer, and say what the reader shows if not
+  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.w.active'), null, { timeout: 60000 })
+    .catch(async (e) => { throw new Error(`no word highlighted; reader status: "${await status()}"`, { cause: e }); });
   const seen = new Set();
   for (let i = 0; i < 25; i++) { const w = await activeWord(); if (w) seen.add(w[0]); await page.waitForTimeout(120); }
   const order = [...seen];
@@ -161,8 +169,25 @@ try {
   pdfs['book.pdf'] = await maker.pdf({ format: 'Letter', displayHeaderFooter: true, margin: { top: '1in', bottom: '1in' },
     headerTemplate: '<div style="font-size:9px;width:100%;text-align:center">The Quiet Library — A Novel</div>',
     footerTemplate: '<div style="font-size:9px;width:100%;text-align:center"><span class="pageNumber"></span></div>' });
+  // A "scan": each page is only a picture of text (with a running header and page number)
+  const scanPage = (n, body) => `<div style="width:816px;height:1056px;padding:72px;box-sizing:border-box;font:16pt Georgia;background:#fff;position:relative">
+    <div style="text-align:center;font-size:11pt">THE QUIET LIBRARY</div><p style="margin-top:40px;line-height:1.5">${body}</p>
+    <div style="position:absolute;bottom:48px;width:672px;text-align:center;font-size:11pt">${n}</div></div>`;
+  const scanBodies = [
+    'Every town has a place where time slows down. In ours, it was the library on Elm Street, with its tall windows and creaking floors.',
+    'Children came after school to read comics in the corner. Retirees argued gently about crossword clues. Nobody was ever in a hurry.',
+    'The vote was unanimous. The library stayed open, and the floors kept creaking, exactly as they should.',
+  ];
+  const imgs = [];
+  for (let i = 0; i < scanBodies.length; i++) {
+    await maker.setViewportSize({ width: 816, height: 1056 });
+    await maker.setContent(`<html><body style="margin:0">${scanPage(i + 1, scanBodies[i])}</body></html>`);
+    imgs.push((await maker.screenshot({ type: 'png' })).toString('base64'));
+  }
+  await maker.setContent(`<html><body style="margin:0">${imgs.map((b) => `<img src="data:image/png;base64,${b}" style="width:8.5in;height:11in;display:block;break-after:page">`).join('')}</body></html>`);
+  pdfs['scan.pdf'] = await maker.pdf({ width: '8.5in', height: '11in', margin: { top: 0, bottom: 0, left: 0, right: 0 } });
   await maker.setContent('<html><body><svg width="600" height="800"><rect width="600" height="800" fill="#eee"/><circle cx="300" cy="300" r="120" fill="#888"/></svg></body></html>');
-  pdfs['scan.pdf'] = await maker.pdf({ format: 'Letter' });
+  pdfs['blank.pdf'] = await maker.pdf({ format: 'Letter' });
   await maker.close();
 
   const pdfTab = await ctx.newPage();
@@ -192,6 +217,11 @@ try {
   // Local file picker
   const local = await ctx.newPage();
   await local.goto(`chrome-extension://${extId}/pdf-reader.html`);
+  if (process.env.DEBUG) {
+    local.on('console', (m) => console.log('local console:', m.type(), m.text().slice(0, 240)));
+    local.on('pageerror', (e) => console.log('local error:', e.message));
+    const tick = setInterval(async () => { const t = await local.textContent('#status').catch(() => null); if (t === null) clearInterval(tick); else console.log('local status:', t.slice(0, 140)); }, 10000);
+  }
   const tmpPdf = join(ext, 'local-test.pdf');
   writeFileSync(tmpPdf, pdfs['book.pdf']);
   await local.setInputFiles('#file', tmpPdf);
@@ -199,19 +229,60 @@ try {
   check('local PDF files open from the picker', /12 paragraphs|13 paragraphs/.test(await local.textContent('#status')), await local.textContent('#status'));
   await local.keyboard.press('Escape');
 
-  // Scanned (image-only) PDF gets a clear message instead of silence
+  // Scanned (image-only) PDF: text is recognized, cleaned, then read
   writeFileSync(tmpPdf, pdfs['scan.pdf']);
   await local.reload();
   await local.setInputFiles('#file', tmpPdf);
-  await local.waitForFunction(() => /scanned/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
-  check('scanned PDFs explain why they can’t be read', true);
+  await local.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 180000 });
+  const scanText = await local.evaluate(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.article').innerText);
+  check('scanned PDFs are recognized and read', /text recognized from scans/.test(await local.textContent('#status'))
+    && /Every town has a place where time slows down/.test(scanText) && /The vote was unanimous/.test(scanText), (await local.textContent('#status')));
+  check('scan headers and page numbers are stripped', !/THE QUIET LIBRARY/.test(scanText) && !/^\s*[123]\s*$/m.test(scanText), JSON.stringify(scanText.slice(0, 100)));
+  await local.keyboard.press('Escape');
+  // A second open of the same scan uses the cache (no recognition step)
+  await local.reload();
+  const t0 = Date.now();
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => /paragraphs/.test(document.getElementById('status').textContent), null, { timeout: 15000 });
+  check('recognized text is cached for next time', Date.now() - t0 < 5000, `${Date.now() - t0} ms`);
+  await local.keyboard.press('Escape');
+  // An image with no text at all gets a clear message
+  writeFileSync(tmpPdf, pdfs['blank.pdf']);
+  await local.reload();
+  await local.setInputFiles('#file', tmpPdf);
+  await local.waitForFunction(() => /No readable text/.test(document.getElementById('status').textContent), null, { timeout: 60000 });
+  check('PDFs with no text at all explain why', true);
   await local.close();
+
+  // Books: an EPUB link pasted into the Books page, read chapter by chapter, and an EPUB file
+  const books = await ctx.newPage();
+  const bookErrors = [];
+  books.on('pageerror', (e) => bookErrors.push(e.message));
+  await books.goto(`chrome-extension://${extId}/book.html`);
+  await books.fill('#q', `${origin}/book.epub`);
+  await books.click('#search-form button');
+  await books.waitForSelector('#chapters li', { timeout: 30000 });
+  const toc = (await books.textContent('#toc-view')).replace(/\s+/g, ' ');
+  check('Books: a pasted EPUB link opens with its chapters', /The Lighthouse Keeper/.test(toc) && /The Storm/.test(toc) && /Morning Light/.test(toc), toc.slice(0, 120));
+  await books.click('#chapters li:nth-child(2) a');
+  await books.waitForSelector('#article p');
+  await books.click('#read');
+  await books.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 60000 });
+  const chapterText = await books.evaluate(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.article').innerText);
+  check('Books: a chapter is read aloud, without the page\'s links', /By dawn the sea was calm/.test(chapterText) && !/The wind rose|Chapters/.test(chapterText), JSON.stringify(chapterText.slice(0, 80)));
+  await books.keyboard.press('Escape');
+  await books.goto(`chrome-extension://${extId}/book.html`);
+  await books.setInputFiles('#file', join(here, 'fixtures', 'book.epub'));
+  await books.waitForSelector('#chapters li', { timeout: 30000 });
+  check('Books: an EPUB file opens from the computer', /book\.html\?file=/.test(books.url()) && (await books.locator('#chapters li').count()) === 2, books.url());
+  check('no errors on the Books page', bookErrors.length === 0, bookErrors.join('; '));
+  await books.close();
 
   const lib2 = await ctx.newPage();
   await lib2.goto(`chrome-extension://${extId}/library.html`);
   await lib2.waitForSelector('#list li');
   const lib2Text = (await lib2.textContent('#list')).replace(/\s+/g, ' ');
-  check('library lists PDFs (web and local)', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text), lib2Text.slice(0, 160));
+  check('library lists PDFs (web and local) and book chapters', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text) && /Book · 127\.0\.0\.1/.test(lib2Text), lib2Text.slice(0, 160));
   await lib2.close();
 
   check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
