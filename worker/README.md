@@ -1,42 +1,38 @@
-# dan-tts API on Cloudflare Workers (free)
+# dan-tts on Cloudflare Workers (free)
 
-The same API as the Python server, running on Cloudflare's free plan. Unlike Render's free plan it **never sleeps** (no one-minute wake-up), and it allows about 100,000 requests a day.
+The site and the API in one Worker on Cloudflare's free plan, at **https://dan-tts.macdaddydwj.workers.dev**. Unlike Render's free plan it **never sleeps** (no one-minute wake-up), and it allows about 100,000 requests a day. The tester uses it by default.
 
 | Endpoint | On the Worker |
 |---|---|
+| `GET /` (demo), `/tester.html`, `/static/…` | ✅ Same files as GitHub Pages |
 | `GET /health`, `GET /voices`, `GET /samples/{voice}` | ✅ (voices and samples are cached) |
 | `POST /synthesize`, `POST /synthesize_with_timing` | ✅ MP3 only |
 | `POST /export?format=json\|webvtt\|srt` | ✅ |
-| `POST /extract_text` (Load from URL) | ❌ Returns a clear message. Use the Render API for this, or the browser extension, which reads pages directly. |
+| `POST /extract_text` (Load from URL) | ✅ Reads `<main>`/`<article>`, drops menus, sidebars and boxes; 5 MB and 15 s limits |
 
-The [tester](https://danielwjohnston.github.io/dan-tts/tester.html) works with it unchanged: put the Worker's address in **Advanced → API Base URL**. This was tested end to end against a local Worker: synthesis, standalone HTML export and batch zips.
+Speech was verified on the deployed Worker on 2026-10-25: Microsoft's voice service accepts connections from Cloudflare's servers (a 7-word synthesis returned a real MP3 with word timings).
 
-## One-time setup (about 10 minutes, all in your browser)
+Non-MP3 formats (m4a, ogg, flac) need ffmpeg, which only the Python server has; the tester greys them out when it talks to the Worker.
 
-After this, every push to `main` that touches the Worker or the engine redeploys it automatically.
+## How it deploys
 
-1. **Create a free Cloudflare account** at https://dash.cloudflare.com/sign-up. No card is needed for Workers.
-2. **Find your Account ID.** In the Cloudflare dashboard, open **Workers & Pages**. The **Account ID** is in the right-hand column. Copy it.
-3. **Create an API token.** Click your profile icon → **My Profile** → **API Tokens** → **Create Token**. Use the **Edit Cloudflare Workers** template, set *Account Resources* to your account and *Zone Resources* to *All zones*, then **Continue to summary** → **Create Token**. Copy the token; it's shown only once.
-4. **Give both to GitHub.** In this repo on GitHub: **Settings** → **Secrets and variables** → **Actions** → **New repository secret**. Add two secrets:
-   - `CLOUDFLARE_API_TOKEN`: the token from step 3
-   - `CLOUDFLARE_ACCOUNT_ID`: the ID from step 2
-5. **Deploy.** Go to **Actions** → **Deploy Cloudflare Worker** → **Run workflow**. When it turns green, the log shows your address, something like `https://dan-tts.<your-subdomain>.workers.dev`.
-6. **Check it:** open `https://dan-tts.<your-subdomain>.workers.dev/health`. You should see `{"status":"ok","runtime":"cloudflare-worker"}`.
-7. **Use it:** in the tester, open **Advanced** and set **API Base URL** to that address. To make it the default for everyone, tell Claude the address and it will update `tester.html`.
+Cloudflare's **Git builds** are connected to this repository (dashboard → Workers & Pages → dan-tts → Settings → Build). Every push to `main` builds and deploys from the root [`wrangler.jsonc`](../wrangler.jsonc): its build command assembles `_site/` (the static front end) and `npx wrangler deploy` uploads that plus the API in `worker/src/`. Other branches get a **preview** at `https://<branch-with-dashes>-dan-tts.macdaddydwj.workers.dev`, linked from the Cloudflare bot's comment on each pull request. There is nothing to configure in GitHub, no API token and no secrets.
 
-Never paste the token anywhere except GitHub's secret box. If it leaks, delete it under **API Tokens** and make a new one.
+**Skip the Python install.** The build image sees `requirements.txt` at the repo root and runs `pip install` (about 10 s) even though the Worker doesn't use it. To turn that off: dashboard → the Worker → **Settings → Build → Build variables**, add `SKIP_DEPENDENCY_INSTALL` = `1`. The build command runs `npx wrangler deploy`, which downloads wrangler itself, so nothing else is needed. (Cloudflare documents the variable under [Build image](https://developers.cloudflare.com/workers/ci-cd/builds/build-image/).)
+
+To deploy from a computer instead: `npm install` in `worker/`, then `npx wrangler login` and `npm run deploy` (which runs `wrangler deploy` from the repo root). Deploying from inside `worker/` with its own `wrangler.toml` would publish the API without the site.
 
 ## Local development
 
 ```bash
 cd worker
 npm install
-npx wrangler dev        # http://127.0.0.1:8787
+npx wrangler dev        # http://127.0.0.1:8787, API only
 ```
 
-The Worker imports the shared engine from `../engine/src`, so there's nothing to copy or sync.
+The Worker imports the shared engine from `../engine/src`, so there's nothing to copy or sync. `src/extract.js` is the Load from URL implementation (a small HTML tokenizer, since there is no DOM in a Worker). Tests: `node --test worker/test/*.test.js` (offline; CI runs them).
 
-## Known unknowns
-- Microsoft's voice service could treat requests from Cloudflare's servers differently from home connections. Local testing can't show this, so the first real deploy is the test. If `/synthesize` returns a 502 from the deployed Worker, Render still works and nothing else is affected.
+## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.
+- Load from URL can't reach sites that block automated access (it says so, with an "Open in browser" link), and pages built entirely in JavaScript give only their description. The browser extension reads such pages in place.
+- The engine depends on an unofficial endpoint and a token scheme pinned in `engine/src/drm.js`. A scheduled GitHub Actions job ([`edge-health.yml`](../.github/workflows/edge-health.yml)) checks the voice list and a short synthesis every six hours, straight from Node and through this Worker, and opens an issue when it fails.

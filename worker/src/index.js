@@ -2,15 +2,13 @@
 // tester (and anything else) can switch by changing the API base URL. Uses the shared
 // engine to talk to Microsoft's voice service directly.
 import { synthesize, connectionHeaders, listVoices } from '../../engine/src/tts.js';
+import { extractText, HttpError } from './extract.js';
 
 const MAX_TEXT_CHARS = 20000;
 const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/;
 const SAMPLE_TEXT = 'This is a sample of the selected voice.';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
-class HttpError extends Error {
-  constructor(status, detail) { super(detail); this.status = status; }
-}
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { ...CORS, ...headers } });
 
 // Workers' outbound WebSocket: fetch() with Upgrade, then accept(). Wrapped in the
@@ -126,7 +124,9 @@ async function route(request, ctx) {
   }
 
   if (request.method === 'POST' && path === '/extract_text') {
-    throw new HttpError(501, 'Load from URL is not available on the Cloudflare Worker yet. Use the Render API for it, or the browser extension (which reads pages directly).');
+    let body;
+    try { body = await request.json(); } catch { throw new HttpError(400, 'Body must be JSON: {"url": "https://..."}'); }
+    return json(await extractText(typeof body.url === 'string' ? body.url : ''));
   }
 
   throw new HttpError(404, 'Not found');

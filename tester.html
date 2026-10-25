@@ -160,7 +160,7 @@
           <select id="voice"></select>
         </div>
         <div>
-          <label>Format</label>
+          <label>Format <span id="format-note" style="font-weight:400;font-size:11px;color:var(--fg2);"></span></label>
           <select id="format">
             <option value="mp3">mp3</option>
             <option value="m4a">m4a</option>
@@ -194,7 +194,8 @@
       <span class="advanced-toggle" id="adv-toggle">Advanced &darr;</span>
       <div class="advanced-content" id="adv-content">
         <label>API Base URL</label>
-        <input id="api" type="text" value="https://dan-tts.onrender.com" />
+        <input id="api" type="text" value="https://dan-tts.macdaddydwj.workers.dev" />
+        <div class="text-meta"><span>Cloudflare Worker (MP3 only, never sleeps) &middot; or a Python server such as <code>http://localhost:8000</code> for m4a/ogg/flac</span></div>
       </div>
 
       <span class="advanced-toggle" id="batch-toggle">Batch &darr;</span>
@@ -398,14 +399,36 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
 
+    /* ---- Which server? The Worker has no ffmpeg, so only MP3 there ---- */
+    async function probeServer(api) {
+      let mp3Only = false;
+      try {
+        const res = await fetch(`${api}/health`);
+        mp3Only = res.ok && (await res.json()).runtime === 'cloudflare-worker';
+      } catch (e) { /* the voices request reports the error */ }
+      if (api !== document.getElementById('api').value.trim().replace(/\/$/, '')) return; // changed meanwhile
+      const formatSel = document.getElementById('format');
+      [...formatSel.options].forEach(opt => {
+        if (opt.value === 'mp3') return;
+        opt.disabled = mp3Only;
+        opt.title = mp3Only ? 'Needs the Python server (ffmpeg)' : '';
+      });
+      if (mp3Only && formatSel.value !== 'mp3') formatSel.value = 'mp3';
+      document.getElementById('format-note').textContent = mp3Only ? '(MP3 on this server)' : '';
+    }
+
     /* ---- Load voices ---- */
+    const currentApi = () => document.getElementById('api').value.trim().replace(/\/$/, '');
     async function loadVoices(refresh = false) {
-      const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+      const api = currentApi();
       logEl.textContent = refresh ? 'Refreshing voices...' : 'Loading voices...';
+      probeServer(api);
       try {
         const res = await fetch(`${api}/voices${refresh ? '?refresh=1' : ''}`);
+        if (api !== currentApi()) return; // the field changed meanwhile: a newer request reports instead
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         allVoices = await res.json();
+        if (api !== currentApi()) return;
         voiceSelect.innerHTML = '';
         allVoices.forEach(v => {
           const opt = document.createElement('option');
@@ -423,6 +446,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         renderGrid();
         logEl.textContent = allVoices.length ? 'Voices loaded.' : 'No voices returned.';
       } catch (err) {
+        if (api !== currentApi()) return;
         console.error(err);
         logEl.textContent = 'Error loading voices: ' + err.message;
       }
@@ -898,7 +922,8 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
           body: JSON.stringify({ url })
         });
         if (!res.ok) {
-          const msg = await res.text();
+          let msg = await res.text();
+          try { msg = JSON.parse(msg).detail || msg; } catch (e) { /* plain text */ }
           throw new Error(`HTTP ${res.status}: ${msg}`);
         }
         const data = await res.json();
@@ -938,7 +963,19 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     }
 
     /* ---- Init ---- */
-    loadVoices();
+    // Served by a dan-tts server (the Worker, or a local Python server)? Then that server is the
+    // API. From a plain static host, a file or GitHub Pages, the default above (the Worker) applies.
+    (async () => {
+      const apiInput = document.getElementById('api');
+      if (/^https?:$/.test(location.protocol) && !/\.github\.io$/i.test(location.hostname)) {
+        try {
+          const res = await fetch(`${location.origin}/health`);
+          if (res.ok && (await res.json()).status === 'ok') apiInput.value = location.origin;
+        } catch (e) { /* not a dan-tts server: keep the default */ }
+      }
+      apiInput.addEventListener('change', () => loadVoices());
+      loadVoices();
+    })();
   </script>
 </body>
 </html>

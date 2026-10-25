@@ -1,0 +1,78 @@
+name: Edge voice service check
+
+# The engine talks to an unofficial Microsoft endpoint with a pinned token scheme, and the
+# offline tests can't tell when that changes. This runs scripts/edge-health.mjs every six
+# hours and keeps one issue open while it fails (closed again when it recovers).
+# GitHub also e-mails the owner about failed scheduled runs; note that GitHub pauses
+# scheduled workflows after 60 days without commits (re-enable it under Actions).
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: edge-health
+  cancel-in-progress: false
+
+env:
+  ISSUE_TITLE: 'Edge voice service check failed'
+  DAN_TTS_WORKER: https://dan-tts.macdaddydwj.workers.dev
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - id: check
+        continue-on-error: true
+        run: node scripts/edge-health.mjs 2>&1 | tee check.log; exit "${PIPESTATUS[0]}"
+
+      - name: Open or update the alert issue
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -o pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # If the lookup itself fails, fail this step (set -e) rather than open a duplicate issue
+          numbers=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number")
+          number=${numbers%%$'\n'*}
+          {
+            echo "The scheduled check failed on $(date -u '+%Y-%m-%d %H:%M UTC') ([run]($run_url))."
+            echo
+            echo '```'
+            tail -n 60 check.log
+            echo '```'
+            echo
+            echo "What to do: run \`node scripts/edge-health.mjs\` locally. If the direct checks fail, Microsoft changed the endpoint or token scheme: update \`engine/src/drm.js\` and \`engine/src/tts.js\` from the latest [edge-tts](https://github.com/rany2/edge-tts) and refresh the token test vectors. If only the Worker checks fail, see \`worker/README.md\`. This issue closes itself when the check passes again."
+          } > body.md
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "$ISSUE_TITLE" --body-file body.md
+          fi
+
+      - name: Close the alert issue after recovery
+        if: steps.check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -o pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          numbers=$(gh issue list --state open --search "in:title \"$ISSUE_TITLE\"" --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number")
+          for number in $numbers; do
+            gh issue close "$number" --comment "Recovered: the check passed on $(date -u '+%Y-%m-%d %H:%M UTC') ([run]($run_url))."
+          done
+
+      - name: Report
+        if: steps.check.outcome == 'failure'
+        run: exit 1

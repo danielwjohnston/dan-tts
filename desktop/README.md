@@ -6,6 +6,7 @@ A desktop app for Windows, macOS and Linux that reads **web pages, PDFs (includi
 - **Books:** find free books on archive.org, or open any EPUB link or file, and read it chapter by chapter.
 - Click any word to jump there. Speed runs from 0.75× to 3×, and there are 322 voices in dozens of languages.
 - **Library with resume:** everything you read keeps its place.
+- **Continue to the next page:** a page with a "next" link (a book read chapter by chapter, a multi-page article) offers it at the end of the text, and can continue on its own per site. Unlike the extension, the app follows such links to other sites too, since it downloads pages itself.
 - Scanned PDFs, such as your own page captures, are recognized on your computer the first time and saved after that.
 
 ## Install
@@ -49,7 +50,7 @@ npm install --no-save playwright
 xvfb-run -a npm test       # Linux; on Windows/macOS just: npm test
 ```
 
-The test drives the real app window against the live voice service (16 checks). It covers the lockdown, a web page, pasted text, a PDF link, a scanned PDF from disk, an EPUB link and file, an archive.org item (with canned archive.org replies, since archive.org often times out from CI machines), the voice list, the library and resume. CI runs it on every change, then builds the Windows, macOS and Linux installers.
+The test drives the real app window against the live voice service (18 checks). It covers the lockdown, a web page, continuing to its next chapter, pasted text, a PDF link, a scanned PDF from disk, an EPUB link and file, an archive.org item (with canned archive.org replies, since archive.org often times out from CI machines), the voice list, the library and resume. CI runs it on every change, then builds the Windows, macOS and Linux installers.
 
 ## Known limitations
 - Builds are unsigned, so you'll see the first-run warning above.

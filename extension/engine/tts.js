@@ -84,8 +84,10 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
     const parts = [];
     const boundaries = [];
     let size = 0;
-    const timer = setTimeout(() => { ws.close(); reject(new Error('TTS timed out')); }, timeoutMs);
-    const fail = (err) => { clearTimeout(timer); try { ws.close(); } catch {} reject(err); };
+    // Settle once: closing a failed socket can fire error/close again (Node's WebSocket does)
+    let settled = false;
+    const timer = setTimeout(() => fail(new Error('TTS timed out')), timeoutMs);
+    const fail = (err) => { if (settled) return; settled = true; clearTimeout(timer); try { ws.close(); } catch {} reject(err); };
 
     const start = () => {
       ws.send(
@@ -109,9 +111,10 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
             }
           }
         } else if (headers.Path === 'turn.end') {
+          if (!size) return fail(new Error('No audio received'));
+          settled = true;
           clearTimeout(timer);
           ws.close();
-          if (!size) return reject(new Error('No audio received'));
           const audio = new Uint8Array(size);
           let off = 0;
           for (const p of parts) { audio.set(p, off); off += p.length; }

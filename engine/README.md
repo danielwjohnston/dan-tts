@@ -24,9 +24,9 @@ const { audio, boundaries } = await synthesize('Hello world', { voice: 'en-US-Ar
 | **Cloudflare Worker** (local `wrangler dev`, real workerd runtime) | ✅ 3.5 s clip in 0.45 s. 87 s paragraph (220 words) in 4.6 s |
 | **Readability** (article extraction, no AI) | ✅ Wikipedia: 700 KB of HTML became a 70 KB clean article. The full *Pride and Prejudice* came through from Gutenberg |
 
-### Not yet verified
-- **Cloudflare production.** Whether Microsoft accepts connections from Cloudflare's IP ranges, and whether the free plan's 10 ms CPU limit holds. Local `wrangler dev` enforces neither. Needs one real deploy (free account).
-- **Firefox.** Firefox supports `declarativeNetRequest`, but the `Origin` rewrite on WebSockets hasn't been tested there.
+### Verified since
+- **Cloudflare production** (2026-10-25): Microsoft accepts connections from Cloudflare's servers, and short and paragraph-length requests run within the free plan's limits. The deployed Worker is the tester's default API. `scripts/edge-health.mjs` re-checks the direct and Worker paths every six hours from CI.
+- **Firefox** (Firefox 158): the `Origin` rewrite works on WebSockets too; the extension supports Firefox 140+.
 
 ### Gotchas found
 - **The token was hardened.** v2 tokens combine a SHA-256 with a hidden prefix and a custom checksum. `src/drm.js` is a straight port. **If Microsoft changes the scheme again, update it from upstream edge-tts and refresh the test vectors.** This is the main maintenance risk.

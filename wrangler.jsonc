@@ -1,7 +1,7 @@
 // The one Cloudflare deploy for dan-tts: the Worker API in worker/ plus the static front end
 // (same files as GitHub Pages) as assets. Paths that match a file get the file; everything else,
-// e.g. /health, /voices, /synthesize, goes to the API. Both the dashboard's Git builds and
-// .github/workflows/deploy-worker.yml deploy from here.
+// e.g. /health, /voices, /synthesize, goes to the API. Cloudflare's Git builds deploy from here
+// on every push to main, and build a preview for every other branch. See worker/README.md.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dan-tts",
