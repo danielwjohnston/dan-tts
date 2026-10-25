@@ -12,7 +12,7 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 - **Word-level highlighting** — real-time word tracking during playback
 - **Paragraph chunking** — long text is split into paragraphs and generated in sequence with a progress bar; highlighting stays in sync across the whole text
 - **Auto-scroll pause** — scroll freely during playback without rubber-banding
-- **URL text extraction** — paste a URL, load page text for read-aloud
+- **URL text extraction** — paste a URL, load page text for read-aloud (menus, sidebars, boxes and hidden elements dropped; the same rules on the Python server and the Cloudflare Worker)
 - **Export** — JSON bundle (audio + timing), WebVTT and SRT captions, a **standalone HTML file** (audio + highlighting player in one file that opens anywhere), or player embed code
 - **Batch** — several texts separated by `---` lines become one zip of MP3s with SRT captions
 - **Standalone player** (`static/tts-player.js`) — drop on any site for highlighting playback
