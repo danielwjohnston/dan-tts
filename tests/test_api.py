@@ -173,4 +173,4 @@ def test_extract_skips_sidebar_and_header_without_main(client, monkeypatch):
     assert "dark and stormy night" in text
     assert "next morning" in text
     assert "Log in" not in text
-    assert "sidebar links" not in text
+    assert "Navigation links" not in text
