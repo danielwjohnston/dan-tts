@@ -2,9 +2,8 @@
 // here and no dependencies, so this is a small, tolerant HTML tokenizer (linear time, implied
 // end tags for p/li/dt/dd/tr/td/option, the escaped-script rules of the HTML spec). It keeps
 // the Python server's rules (which element is read, the meta-description fallback, limits and
-// error messages, so the tester behaves the same against either server) and goes further on
-// what is dropped: sidebars, menus and boxes (as the Load from URL cleanup, PR #29, proposes
-// for the Python server), MediaWiki chrome, hidden elements and form controls.
+// error messages, so the tester behaves the same against either server) and its sidebar, menu
+// and box stripping, and goes further: MediaWiki chrome, hidden elements and form controls.
 
 export const MAX_FETCH_BYTES = 5 * 1024 * 1024;
 export const MAX_REDIRECTS = 5;

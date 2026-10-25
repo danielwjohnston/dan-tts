@@ -349,10 +349,7 @@ async def extract_text(payload: ExtractTextRequest):
             break
     for tag in soup(["script", "style", "nav", "header", "footer", "noscript", "svg", "img"]):
         tag.decompose()
-    # Try to get main content first
-    main = soup.find("main") or soup.find("article") or soup.find("body")
-    if main is None:
-        main = soup
+    main = _content_root(soup)
     text = main.get_text(separator="\n", strip=True)
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -365,6 +362,35 @@ async def extract_text(payload: ExtractTextRequest):
             )
         text = "\n\n".join(part for part in (title, meta_desc) if part)
     return {"text": text, "title": title, "chars": len(text)}
+
+
+_CHROME_HINT = re.compile(
+    r"(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc|masthead|site-header|site-footer)([-_]|$)",
+    re.I,
+)
+
+
+def _content_root(soup: BeautifulSoup):
+    """Pick the element holding the article text, without reading site chrome.
+
+    Sidebars, menus and boxes are dropped first, then the <main> or <article> wins
+    when present. Otherwise the whole <body> is read, so multi-chapter pages stay whole.
+    """
+    for tag in soup.find_all(attrs={"role": re.compile("navigation|complementary|banner|contentinfo")}):
+        tag.decompose()
+    for tag in soup.find_all(["aside", "menu"]):
+        tag.decompose()
+    for tag in soup.find_all(True):
+        if tag.parent is None or tag.name in ("html", "body", "main", "article"):
+            continue
+        tokens = [tag.get("id") or ""] + list(tag.get("class") or [])
+        if any(_CHROME_HINT.search(token) for token in tokens):
+            tag.decompose()
+    for name in ("main", "article"):
+        found = soup.find(name)
+        if found is not None:
+            return found
+    return soup.body or soup
 
 
 def _boundary_ms(boundary: dict) -> tuple:

@@ -8,7 +8,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Paragraph chunking**~~ — Done: long text is split into paragraphs and synthesized in sequence with a progress bar
 - ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
-- **Cleaner "Load from URL"** (Python server) — `app/main.py`'s `/extract_text` reads the whole `<body>` when a page has no `<main>`/`<article>`, so site chrome (e.g. Wikisource's sidebar and header box) gets read aloud. PR #29 adds sidebar/menu stripping there. The Worker (the tester's default API) already skips sidebars, menus, MediaWiki boxes and hidden elements; port its rules to Python so both servers read the same text
+- ~~**Cleaner "Load from URL"**~~ — Done: `/extract_text` drops sidebars, menus and boxes, then reads `<main>` or `<article>` when present, else the cleaned `<body>`. The Worker's version also skips MediaWiki boxes (Wikisource's header, "[edit]" links, categories), hidden elements and form controls; port those rules to Python so both servers read the same text
 - ~~**"Load from URL" on the Cloudflare Worker**~~ — Done: `worker/src/extract.js`, a dependency-free extractor with the Python server's limits and messages, plus sidebar/menu/box, MediaWiki and hidden-element stripping
 - ~~**Test speech on the deployed Worker**~~ — Done (2026-10-25): `/synthesize` and `/synthesize_with_timing` return real audio and word timings from Cloudflare's servers
 - ~~**Make the Worker the tester's default API**~~ — Done: the tester defaults to the Worker, uses its own server when served by one, and greys out the formats the Worker can't produce
@@ -43,6 +43,31 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Desktop auto-update** — after releases exist: check the latest release on start and offer to update (`electron-updater`)
 - **Phone** — the reader as an installable web app (PWA) that appears in the phone's Share menu, so "Share → dan-tts" reads an article. Needs the Worker (or another server) for page downloads and voice headers, since a web page can't set them itself
 - **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
+
+## Voice Training (in-house voice, PR #18)
+
+Prep tools exist (`voice-training/`). Everything below is open. Ordered by what unblocks the next step.
+
+**Blocked on a decision**
+- **Consent wording and legal review.** The recording page's consent text is a DRAFT. Get it reviewed for every region it may reach. Current text says permission is irrevocable once recordings are used for training.
+- **Recording storage and upload.** Preferred direction: process clips live and discard the audio. Needs an endpoint in `app/` that extracts training features, stores only those, and deletes the audio.
+- **Country gate.** `BLOCKED_COUNTRIES` in `voice-training/collect/index.html` is empty and the country is self-reported. Fill it in once the legal review is done.
+- **Single voice vs. multi-speaker.** A pilot of a single contributor's voice is simpler and is the recommended first step. Multi-speaker needs far more data and more compute.
+- **Hosting.** Decide whether the recording page goes to GitHub Pages or stays private.
+
+**Needs hardware or a real run**
+- **Run `voice-training/train.sh` on a GPU machine** against a real Piper checkout. Only the validation stage has been dry-run. Check the Python version, PyTorch/CUDA install, checkpoint download, and a real epoch count (the script uses 100 as a placeholder).
+- **Test the recording page with a real microphone.** Check that browser recording and the 22050 Hz WAV conversion work, and that the multi-file download isn't blocked by the browser.
+- **Pilot with 5–10 volunteers.** Each reads a few dozen sentences. Use it to check recording quality, the consent flow, and whether the model learns usable speech before scaling.
+
+**Needs investigation**
+- **Word timings for highlighting.** Check whether Piper's per-phoneme durations can drive word-level highlighting, or whether a forced aligner is needed.
+- **Licensing.** Piper's current code is GPL-3.0-or-later and depends on eSpeak-ng. Confirm what that means before shipping anything built on it.
+- **Licensed corpora as a starting point.** Evaluate public speech datasets (e.g. LJSpeech, LibriTTS) and their licenses as a way to train without new recruitment.
+
+**Later**
+- **Provider abstraction.** Add a provider layer in `engine/src/` and `app/main.py` so a trained Piper voice sits alongside Edge and the hosted options.
+- **Hosted alternatives** (Polly, Google Cloud TTS) as fallbacks if Edge's unofficial endpoint breaks.
 
 ## Longer-Term / Experimental
 

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice recording</title>
+<style>
+  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #6b6b70; --accent: #2a6df4; --card: #fff; --line: #e2e2e6; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #141416; --fg: #f2f2f4; --muted: #9a9aa2; --accent: #6b9bff; --card: #1f1f23; --line: #33333a; }
+  }
+  :root[data-theme="dark"] { --bg: #141416; --fg: #f2f2f4; --muted: #9a9aa2; --accent: #6b9bff; --card: #1f1f23; --line: #33333a; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .prompt { font-size: 1.25rem; min-height: 4.5em; }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  details { margin-top: 8px; }
+  audio { width: 100%; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Help build a voice</h1>
+
+  <section class="card" id="consent-card">
+    <p><strong>DRAFT consent text, pending review.</strong></p>
+    <p>You'll read short sentences aloud, and your recordings may be used to train a text-to-speech voice that is released for others to use.</p>
+    <p class="muted">Before you record, please confirm the points below. You can stop at any time.</p>
+    <label class="row"><input type="checkbox" id="c-own"> I am the person speaking, or I have the right to record this voice.</label>
+    <label class="row"><input type="checkbox" id="c-train"> I agree that my recordings may be used to train and publicly release a synthetic voice, and that the voice may be used to read text aloud.</label>
+    <label class="row"><input type="checkbox" id="c-withdraw"> I understand that this permission is irrevocable. Once my recordings are used for training, they can't be removed from the model, and I won't ask for that.</label>
+    <label class="row">Country I'm in: <input type="text" id="c-country" autocomplete="country-name" placeholder="e.g. United States"></label>
+    <p class="muted" id="country-note"></p>
+    <p><button class="primary" id="consent-go" disabled>Continue</button></p>
+    <details><summary class="muted">Who sees my recordings?</summary>
+      <p class="muted">Not decided yet. This section must be filled in before the page is published.</p>
+    </details>
+  </section>
+
+  <section class="card" id="record-card" hidden>
+    <p class="muted" id="progress"></p>
+    <p class="prompt" id="prompt"></p>
+    <div class="row">
+      <button id="rec">Record</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="keep" disabled>Keep</button>
+      <button id="redo" disabled>Redo</button>
+      <button id="skip">Skip</button>
+    </div>
+    <audio id="playback" controls hidden></audio>
+    <p class="muted" id="status"></p>
+  </section>
+
+  <section class="card" id="done-card" hidden>
+    <p>Thanks. <span id="count"></span> clips kept.</p>
+    <p class="row"><button class="primary" id="download">Download my clips</button></p>
+    <p class="muted">Downloads a zip of WAV files and a manifest recording your consent.</p>
+  </section>
+</main>
+
+<script>
+const PROMPTS = [
+  "The quick brown fox jumps over the lazy dog.",
+  "Please read this sentence in your normal speaking voice.",
+  "The river runs quietly past the old stone bridge.",
+  "Our plan is simple, and we should keep it that way.",
+  "She opened the window and let the morning air in.",
+  "Reading aloud is easier when the words are familiar.",
+  "The train leaves from platform four in a few minutes.",
+  "Thank you for taking the time to help with this.",
+];
+const TARGET_RATE = 22050;
+const MIN_KEEP = 3;
+const CONSENT_VERSION = "draft-1";
+
+const $ = (id) => document.getElementById(id);
+const state = { order: [...PROMPTS], index: 0, pending: null, kept: [], consent: null };
+
+// Countries where a contributor can't take part. Filled in by the project owner, not by this page.
+// Matching is case-insensitive on the name the contributor types. Empty means no restriction.
+const BLOCKED_COUNTRIES = [];
+
+// Consent: all three boxes and a country must be given before recording.
+// The country check is a convenience, not verification: contributors answer it themselves.
+function isBlocked(country) {
+  return BLOCKED_COUNTRIES.some((c) => c.toLowerCase() === country.trim().toLowerCase());
+}
+function checkConsent() {
+  const country = $("c-country").value.trim();
+  const blocked = country !== "" && isBlocked(country);
+  $("country-note").textContent = blocked ? "Sorry, contributions from this country aren't accepted." : "";
+  $("consent-go").disabled = blocked || country === "" || !["c-own", "c-train", "c-withdraw"].every((id) => $(id).checked);
+}
+["c-own", "c-train", "c-withdraw", "c-country"].forEach((id) => $(id).addEventListener("input", checkConsent));
+$("consent-go").addEventListener("click", () => {
+  state.consent = { version: CONSENT_VERSION, acceptedAt: new Date().toISOString(), country: $("c-country").value.trim() };
+  $("consent-card").hidden = true;
+  $("record-card").hidden = false;
+  showPrompt();
+});
+
+function showPrompt() {
+  if (state.index >= state.order.length) return finish();
+  state.pending = null;
+  $("prompt").textContent = state.order[state.index];
+  $("progress").textContent = `${state.index + 1} of ${state.order.length} · ${state.kept.length} kept`;
+  $("playback").hidden = true;
+  $("status").textContent = "";
+  setButtons({ rec: true, stop: false, keep: false, redo: false, skip: true });
+}
+
+function setButtons(on) {
+  for (const [id, enabled] of Object.entries(on)) $(id).disabled = !enabled;
+}
+
+// Record with the browser's recorder, then decode and resample to 22050 Hz mono WAV.
+let recorder, chunks, stream;
+$("rec").addEventListener("click", async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (err) {
+    $("status").textContent = "Microphone access was blocked. Allow it in your browser settings and try again.";
+    return;
+  }
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => chunks.push(e.data);
+  recorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const blob = new Blob(chunks, { type: recorder.mimeType });
+    state.pending = await toWav(blob);
+    const url = URL.createObjectURL(state.pending);
+    $("playback").src = url;
+    $("playback").hidden = false;
+    setButtons({ rec: false, stop: false, keep: true, redo: true, skip: false });
+  };
+  recorder.start();
+  setButtons({ rec: false, stop: true, keep: false, redo: false, skip: false });
+  $("status").textContent = "Recording…";
+});
+$("stop").addEventListener("click", () => { recorder.stop(); $("status").textContent = "Processing…"; });
+$("keep").addEventListener("click", () => {
+  state.kept.push({ id: `${String(state.kept.length + 1).padStart(4, "0")}`, text: state.order[state.index], wav: state.pending });
+  state.index++;
+  showPrompt();
+});
+$("redo").addEventListener("click", () => { state.pending = null; showPrompt(); $("status").textContent = "Try again."; });
+$("skip").addEventListener("click", () => { state.index++; showPrompt(); });
+
+async function toWav(blob) {
+  const decoded = await new AudioContext().decodeAudioData(await blob.arrayBuffer());
+  const frames = Math.ceil(decoded.duration * TARGET_RATE);
+  const offline = new OfflineAudioContext(1, frames, TARGET_RATE);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const mono = (await offline.startRendering()).getChannelData(0);
+  return encodeWav(mono, TARGET_RATE);
+}
+
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (off, s) => [...s].forEach((c, i) => v.setUint8(off + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+function finish() {
+  $("record-card").hidden = true;
+  $("done-card").hidden = false;
+  $("count").textContent = state.kept.length;
+  $("download").disabled = state.kept.length < MIN_KEEP;
+  if (state.kept.length < MIN_KEEP) $("done-card").querySelector("p").textContent = `Keep at least ${MIN_KEEP} clips to download.`;
+}
+
+// Downloads are just files for now. No upload happens until hosting and retention are decided.
+$("download").addEventListener("click", () => {
+  const manifest = {
+    consent: state.consent,
+    clips: state.kept.map((c) => ({ file: `wavs/${c.id}.wav`, text: c.text })),
+  };
+  const files = [
+    ...state.kept.map((c) => ({ name: `wavs/${c.id}.wav`, blob: c.wav })),
+    { name: "manifest.json", blob: new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }) },
+    { name: "metadata.csv", blob: new Blob(state.kept.map((c) => `${c.id}|${c.text}\n`), { type: "text/csv" }) },
+  ];
+  const a = document.createElement("a");
+  // Plain downloads, one file per click, keeps this page dependency-free.
+  files.forEach((f, i) => setTimeout(() => {
+    a.href = URL.createObjectURL(f.blob);
+    a.download = f.name.replace("/", "_");
+    a.click();
+  }, i * 200));
+});
+</script>
+</body>
+</html>
