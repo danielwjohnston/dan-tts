@@ -22,6 +22,8 @@
   let nextLink = null;      // { url, label } of the page being read, when it has a same-site "next" link
   let nextDoc = null;       // a page fetched by "Continue": pageParagraphs() returns it instead of the DOM
   let hops = 0;             // pages continued into without leaving the tab (history.pushState)
+  let hop = 0;              // bumps when a hop starts and when the reader stops or restarts, so a slow fetch can't act after the user moved on
+  let loadingNext = false;  // a hop's fetch is in flight: ignore more clicks until it settles
   let autoHere = false;     // this site is remembered: continue on its own when a page ends
   let countdown = null;
 
@@ -195,7 +197,13 @@
     if (autoHere) {
       const lead = state === 'stayed' ? 'Not continuing this time. ' : state === 'countdown' ? '' : 'Continues on its own when this page ends. ';
       if (lead) note.append(lead);
-      note.append(link('Turn off for this site', () => { setAutoNext(false).catch(() => {}); showNextBox(); }));
+      note.append(link('Turn off for this site', () => {
+        const counting = !!countdown;
+        cancelCountdown();
+        setAutoNext(false).catch(() => {});
+        if (counting) setStatus('Done');
+        showNextBox();
+      }));
     }
     box.append(label, btns, note);
     article.append(box);
@@ -221,12 +229,20 @@
   }
   function cancelCountdown() { clearTimeout(countdown); countdown = null; }
 
+  // Like the browser would: the header's charset, else a <meta charset> near the top, else UTF-8
+  // (Response.text() is always UTF-8, and chapter-per-page sites are often older and not)
+  function decodeHtml(bytes, contentType) {
+    let charset = (contentType.match(/charset=["']?([\w.:-]+)/i) || [])[1];
+    if (!charset) charset = (new TextDecoder('latin1').decode(bytes.subarray(0, 2048)).match(/<meta[^>]+charset=["']?([\w.:-]+)/i) || [])[1];
+    try { return new TextDecoder(charset || 'utf-8').decode(bytes); } catch { return new TextDecoder().decode(bytes); }
+  }
+
   async function fetchNextDoc(url) {
     const res = await fetch(url, { headers: { Accept: 'text/html,application/xhtml+xml' } });
     if (!res.ok || !/html|xml/i.test(res.headers.get('content-type') || '')) throw new Error(`HTTP ${res.status}`);
     const finalUrl = res.url || url;
     if (new URL(finalUrl).origin !== location.origin) throw new Error('redirected off the site');
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const doc = new DOMParser().parseFromString(decodeHtml(new Uint8Array(await res.arrayBuffer()), res.headers.get('content-type') || ''), 'text/html');
     const base = doc.createElement('base');
     base.href = finalUrl;
     doc.head.prepend(base);
@@ -240,21 +256,25 @@
   }
 
   async function goNext() {
-    if (!nextLink) return;
+    if (!nextLink || loadingNext) return;
     cancelCountdown();
     const { url } = nextLink;
     // Desktop app: its reader page downloads any address and starts reading by itself
-    if (window.__danTtsDoc?.next) { location.href = `reader.html?url=${encodeURIComponent(url)}`; return; }
+    if (window.__danTtsDoc?.next) { stop(false); location.href = `reader.html?url=${encodeURIComponent(url)}`; return; }
+    const mine = ++hop;
+    loadingNext = true;
+    article.querySelectorAll('.nextbox button').forEach((b) => { b.disabled = true; });
     setStatus('Loading next…');
     let doc = null;
     try { doc = await fetchNextDoc(url); } catch (e) { console.warn('dan-tts: could not load the next page here, opening it instead', e); }
-    if (doc) {
-      stop(false); // saves this page's spot under its own address, before the address changes
-      try { history.pushState(null, '', doc.url); } catch { doc = null; }
-    }
+    loadingNext = false;
+    if (mine !== hop || mode !== 'page') return; // closed, restarted or read something else meanwhile
+    stop(false); // stops the voice and saves this page's spot under its own address, before the address changes
+    if (doc) { try { history.pushState(null, '', doc.url); } catch { doc = null; } }
     if (!doc) {
       // Load the page for real; the background starts the reader again once it is up
-      await chrome.runtime.sendMessage({ target: 'background', cmd: 'continue', url }).catch(() => {});
+      const from = location.href.replace(/#.*$/, '');
+      await chrome.runtime.sendMessage({ target: 'background', cmd: 'continue', url, from }).catch(() => {});
       location.href = url;
       return;
     }
@@ -354,6 +374,7 @@
   // The PDF reader sets __danTtsDocUrl/__danTtsDocId so each PDF gets its own entry
   const pageUrl = () => window.__danTtsDocUrl || location.origin + location.pathname + location.search;
   const progressKey = () => 'progress:' + (window.__danTtsDocId || pageUrl());
+  let readingUrl = '', readingKey = ''; // fixed when reading starts: the address can move (Back after a hop) before the last save
   let fingerprint = '';
   let lastSave = 0;
   let resumedNote = false;
@@ -362,14 +383,15 @@
   const hash = (str) => { let h = 5381; for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 
   function saveProgress(fields) {
-    if (mode !== 'page') return;
+    if (mode !== 'page' || !readingKey) return;
     const title = window.__danTtsDoc?.title || article.querySelector('h1')?.textContent || document.title;
-    chrome.storage.local.set({ [progressKey()]: { url: pageUrl(), title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
+    chrome.storage.local.set({ [readingKey]: { url: readingUrl, title, fp: fingerprint, total: chunks.length, wordsTotal: tokens.length, updatedAt: Date.now(), ...fields } }).catch(() => {});
   }
 
   // ---- Start / controls ----
   async function start(requested) {
     await ready;
+    hop++; // a hop still loading belongs to what was being read before
     stop(false);
     const sel = getSelection();
     const hasSelection = sel && !sel.isCollapsed && sel.toString().trim().length > 0;
@@ -399,8 +421,9 @@
     resumedNote = false;
     if (mode === 'page') {
       fingerprint = `${chunks.length}:${hash(chunks.slice(0, 3).join('|').slice(0, 4000))}`;
-      const key = progressKey();
-      const saved = (await chrome.storage.local.get(key))[key];
+      readingUrl = pageUrl();
+      readingKey = progressKey();
+      const saved = (await chrome.storage.local.get(readingKey))[readingKey];
       if (saved && saved.fp === fingerprint && !saved.done && (saved.chunk > 0 || saved.ticks > 2e7) && saved.chunk < chunks.length) {
         startChunk = saved.chunk;
         startTicks = Math.max(0, saved.ticks - 1e7); // back up a second for context
@@ -418,6 +441,7 @@
   function stop(hide = true) {
     clearInterval(keepAlive);
     cancelCountdown();
+    if (hide) hop++; // abandon a hop still loading
     if (mode === 'page' && lastPos && state !== 'idle') saveProgress(lastPos); // exact spot on close
     lastPos = null;
     if (mode) toPlayer('stop');
@@ -483,6 +507,14 @@
   // Back/forward after continuing: close, which reloads the page the address bar now names
   addEventListener('popstate', () => { if (hops) stop(); });
 
+  // After "Continue" had to load a page for real, that page may still be fetching its text
+  // (which is usually why it couldn't be read from its HTML): give it up to 5 s to appear
+  const textSettled = () => new Promise((resolve) => {
+    const t0 = Date.now();
+    const tick = () => { if ((document.body?.innerText || '').trim().length > 200 || Date.now() - t0 > 5000) resolve(); else setTimeout(tick, 250); };
+    tick();
+  });
+
   window.__danTtsStart = start; // used by the PDF reader page
 
   // ---- Messages from the player (via the background worker) ----
@@ -490,7 +522,7 @@
     // Book chapter pages hear every runtime message, so they take only those tagged with their
     // tab id. Other extension pages (the PDF reader) hear them too, and ignore any tagged one.
     if (msg.tabId !== window.__danTtsTabId) return;
-    if (msg.event === 'start') { start(msg.mode); return; }
+    if (msg.event === 'start') { (msg.continued ? textSettled() : Promise.resolve()).then(() => start(msg.mode)); return; }
     if (!mode) return;
     if (msg.event === 'chunk') {
       currentChunk = msg.chunk;

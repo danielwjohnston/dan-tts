@@ -67,7 +67,7 @@ const sendToBook = (msg) => chrome.runtime.sendMessage({ ...msg, tabId: activeTa
 const READER_URL = chrome.runtime.getURL('pdf-reader.html');
 const isPdfUrl = (url) => /^(https?|file):/.test(url || '') && /\.pdf($|[?#])/i.test(url);
 
-export async function startReading(tabId, mode = 'auto', bookPage = false) {
+export async function startReading(tabId, mode = 'auto', bookPage = false, extra = {}) {
   if (bookPage) {
     if (activeTabId !== null && activeTabId !== tabId) sendToPlayer({ cmd: 'stop' });
     activeTabId = tabId;
@@ -96,7 +96,7 @@ export async function startReading(tabId, mode = 'auto', bookPage = false) {
   activeTabId = tabId;
   activeIsExtensionPage = false;
   activeIsBook = false;
-  chrome.tabs.sendMessage(tabId, { event: 'start', mode });
+  chrome.tabs.sendMessage(tabId, { event: 'start', mode, ...extra });
 }
 
 chrome.action.onClicked.addListener((tab) => startReading(tab.id, 'auto', tab.url?.startsWith(BOOK_PAGE)));
@@ -162,7 +162,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // "Continue to next page" when the reader couldn't fetch the page itself: the tab loads it
   // for real, and reading starts again once it is up (see tabs.onUpdated below)
   if (msg.target === 'background' && msg.cmd === 'continue' && sender.tab) {
-    chrome.storage.session.set({ pendingContinue: { tabId: sender.tab.id, url: msg.url, at: Date.now() } }).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+    chrome.storage.session.set({ pendingContinue: { tabId: sender.tab.id, url: msg.url, from: msg.from || '', at: Date.now() } }).then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
     return true;
   }
   if (msg.target === 'background' && msg.cmd === 'voices') {
@@ -177,10 +177,16 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   const { pendingContinue: pending } = await chrome.storage.session.get('pendingContinue');
   if (!pending || pending.tabId !== tabId) return;
   // The address is only visible with access to the tab (Chrome keeps activeTab across
-  // same-site navigations); when it is, make sure this is the page we were sent to
-  if (tab.url && tab.url.replace(/#.*$/, '') !== pending.url.replace(/#.*$/, '')) return;
+  // same-site navigations). When it is, make sure the tab left the page that asked (a late
+  // "complete" of that page) and is still on the site; the site may have redirected the link
+  // (a trailing slash, a parameter), so the exact address isn't required.
+  if (tab.url) {
+    let same;
+    try { same = new URL(tab.url).origin === new URL(pending.url).origin && tab.url.replace(/#.*$/, '') !== pending.from; } catch { same = false; }
+    if (!same) { if (Date.now() - pending.at >= 60000) chrome.storage.session.remove('pendingContinue'); return; }
+  }
   await chrome.storage.session.remove('pendingContinue');
-  if (Date.now() - pending.at < 60000) startReading(tabId, 'page');
+  if (Date.now() - pending.at < 60000) startReading(tabId, 'page', false, { continued: true });
 });
 
 // Ensure the rule exists whenever the worker wakes (dynamic rules persist, but cheap to check)

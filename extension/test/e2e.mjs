@@ -164,12 +164,13 @@ try {
   await overlayHas('Nobody noticed the stranger');
   check('a page with a next link offers it at the end of the text', (await nextTitle()) === 'Next chapter', `box: ${await shadow(`return root.querySelector('.nextbox')?.textContent;`)}`);
   await waitWord();
+  await page.evaluate(() => { window.__danTtsSameDocument = true; }); // gone if the tab navigates for real
   await shadow(`root.querySelector('.nextbox .go').click();`);
   await page.waitForURL(/\/chapter2\.html$/, { timeout: 20000 });
   await overlayHas('behind the atlases');
   await waitWord();
   check('Continue reads the next page in the same tab: address and title move, no reload',
-    await page.evaluate(() => document.title === 'Chapter Two' && !!document.querySelector('dan-tts-root')) && (await shadow(`return root.querySelector('.article h1').textContent;`)) === 'Chapter Two', page.url());
+    await page.evaluate(() => window.__danTtsSameDocument === true && document.title === 'Chapter Two' && !!document.querySelector('dan-tts-root')) && (await shadow(`return root.querySelector('.article h1').textContent;`)) === 'Chapter Two', page.url());
   check('the fetched page\'s own "Next →" link is found, so chapters chain', (await nextTitle()) === 'Next', `${await nextTitle()}`);
   await shadow(`root.querySelector('.nextbox .always').click();`);
   await page.waitForURL(/\/chapter3\.html$/, { timeout: 20000 });
@@ -213,6 +214,14 @@ try {
       self: find('<a rel="next" href="/book/ch2#top">Next</a>'),
       js: find('<a href="javascript:void(0)">Next</a>'),
       phrase: find('<a href="/series">Next articles in this series</a>'),
+      wikisource: find('<div class="wst-header"><div class="wst-header-back"><div class="wst-header-back-link"><a href="/book/ch1">Chapter 1</a></div></div><div class="wst-header-forward"><div class="wst-header-forward-link"><a href="/book/ch3" title="Book/Chapter 3">Chapter 3</a></div><div class="wst-header-forward-arrow">→</div></div></div>'),
+      titled: find('<a href="/book/ch3">Next: Chapter III</a>'),
+      titled2: find('<a href="/book/ch3">Next Chapter (3)</a> <a href="/book/ch1">[Prev]</a>'),
+      steps: find('<a href="/docs/next-steps">Next steps</a>'),
+      wrapper: find('<div id="__next"><div><header><a href="/">Blog</a></header><p>text</p><footer><a href="/about">About</a></footer></div></div>'),
+      upNext: find('<section class="up-next"><h2>Up next</h2><a href="/a">Story A</a><a href="/b">Story B</a><a href="/c">Story C</a></section>'),
+      comments: find('<nav class="comment-navigation"><div class="nav-previous"><a href="/book/ch2/comment-page-1/#comments">Older comments</a></div><div class="nav-next"><a href="/book/ch2/comment-page-3/#comments">Newer comments</a></div></nav>'),
+      wordpress: find('<a rel="next" href="/book/ch3"><span class="screen-reader-text">Next Post</span><span aria-hidden="true" class="nav-subtitle">Next</span> <span class="nav-title">Chapter 3</span></a>'),
     };
   }, origin);
   check('next-link finder: rel=next wins, then "Next ›" text, a pager\'s next class, a forward arrow; never a back arrow, other sites, the same page, javascript: or phrases',
@@ -220,6 +229,9 @@ try {
     && heur.arrowTitle?.url === `${origin}/book/ch3` && heur.arrowTitle.label === 'Chapter 3' && heur.arrowOnly?.label === 'ch3' && heur.arrowBack === null
     && heur.pager?.url === `${origin}/book/ch3` && heur.pager.label === 'ch3'
     && heur.crossSite === null && heur.self === null && heur.js === null && heur.phrase === null, JSON.stringify(heur));
+  check('next-link finder: Wikisource\'s forward link, "Next: Chapter III", "Next Chapter (3)" and WordPress labels; never "Next steps", a page wrapper, an "up next" block or comment pages',
+    heur.wikisource?.url === `${origin}/book/ch3` && heur.wikisource.label === 'Chapter 3' && heur.titled?.label === 'Chapter III' && heur.titled2?.url === `${origin}/book/ch3` && heur.titled2.label === 'Chapter (3)'
+    && heur.steps === null && heur.wrapper === null && heur.upNext === null && heur.comments === null && heur.wordpress?.label === 'Chapter 3', JSON.stringify(heur));
 
   // 8. Security: a website can't use the extension's header rule
   const siteAttempt = await page.evaluate((url) => new Promise((res) => {
