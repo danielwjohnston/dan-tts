@@ -19,6 +19,7 @@ from urllib.parse import urljoin, urlparse
 import aiohttp
 import edge_tts
 from bs4 import BeautifulSoup
+from bs4.element import NavigableString, PreformattedString, Tag
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -340,20 +341,18 @@ async def extract_text(payload: ExtractTextRequest):
         raise error
 
     soup = BeautifulSoup(html, "html.parser")
-    # Grab meta descriptions before stripping tags, as a fallback for JS-rendered pages
+    # Grab the title and meta descriptions before pruning (a fallback for JS-rendered pages)
     meta_desc = ""
     for attrs in ({"property": "og:description"}, {"name": "description"}, {"name": "twitter:description"}):
         tag = soup.find("meta", attrs=attrs)
         if tag and tag.get("content", "").strip():
             meta_desc = tag["content"].strip()
             break
-    for tag in soup(["script", "style", "nav", "header", "footer", "noscript", "svg", "img"]):
-        tag.decompose()
-    main = _content_root(soup)
-    text = main.get_text(separator="\n", strip=True)
-    # Collapse excessive blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    title = _WS.sub(" ", soup.title.string).strip() if soup.title and soup.title.string else ""
+    if soup.head is not None:
+        soup.head.decompose()
+    _prune(soup)
+    text = _readable_text(_content_root(soup))
     if len(text.split()) < 5:
         if not meta_desc:
             raise HTTPException(
@@ -364,33 +363,123 @@ async def extract_text(payload: ExtractTextRequest):
     return {"text": text, "title": title, "chars": len(text)}
 
 
+# ---- Load from URL: the readable text of a page ----
+# The same rules as the Cloudflare Worker (worker/src/extract.js), so both servers read the
+# same text: drop code, pictures, site chrome, hidden elements and form controls; read the
+# first <main>, else the first <article>, else the body; blank lines between paragraphs.
+
+# Never read aloud
+_DROP_TAGS = {
+    "script", "style", "noscript", "template", "svg", "math", "img", "picture", "nav", "header", "footer", "aside", "menu",
+    "iframe", "object", "embed", "canvas", "video", "audio", "select", "button", "textarea", "datalist", "noframes",
+}
+# Paragraph breaks (a blank line) and plain line breaks
+_PARA_TAGS = {
+    "p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "figcaption", "hr", "dd", "dt", "tr", "caption", "summary",
+    "details", "figure", "table", "ul", "ol", "dl",
+}
+_BLOCK_TAGS = {
+    "div", "section", "article", "main", "body", "html", "address", "fieldset", "form", "legend", "td", "th", "thead", "tbody",
+    "tfoot", "dialog", "center", "br", "label", "option",
+}
+_KEEP_ROOTS = {"html", "body", "main", "article"}
+# Ids and classes that mark sidebars, menus and boxes, plus the generic markers MediaWiki sites
+# (Wikisource, Wikipedia) and accessibility helpers use for things that aren't the text:
+# print-hidden boxes, hatnotes, category links, "[edit]" links, screen-reader-only labels
 _CHROME_HINT = re.compile(
-    r"(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc|masthead|site-header|site-footer)([-_]|$)",
+    r"(^|[-_])(sidebar|side-box|menu|navbar|breadcrumbs?|cookies?|comments?|share|sharing|social|promo|ads?|advert(isement)?|toc"
+    r"|masthead|site-header|site-footer|noprint|noexport|hatnote|catlinks|printfooter|editsection|sitesub|contentsub|indicators"
+    r"|skip-link|sr-only|visually-hidden|screen-reader-text)([-_]|$)",
     re.I,
 )
+_CHROME_ROLE = re.compile(r"navigation|complementary|banner|contentinfo|button|menu|menubar|toolbar|search|dialog|tooltip|tablist|note")
+_HIDDEN_STYLE = re.compile(r"(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)", re.I)
+_WS = re.compile(r"[\s\u00a0]+")
+
+
+def _is_chrome(tag: Tag) -> bool:
+    """Site chrome, or not shown to sighted readers either: skip it."""
+    attrs = tag.attrs
+    role = attrs.get("role") or ""
+    if _CHROME_ROLE.search(role if isinstance(role, str) else " ".join(role)):
+        return True
+    if "hidden" in attrs or attrs.get("aria-hidden") == "true" or "data-nosnippet" in attrs or _HIDDEN_STYLE.search(attrs.get("style") or ""):
+        return True
+    if tag.name in _KEEP_ROOTS:
+        return False
+    tokens = [attrs.get("id") or ""] + list(attrs.get("class") or [])
+    return any(_CHROME_HINT.search(token) for token in tokens if token)
+
+
+def _prune(soup: BeautifulSoup) -> None:
+    """Remove everything that is never read aloud."""
+    for tag in soup.find_all(True):
+        if tag.decomposed:  # inside something already removed
+            continue
+        if tag.name in _DROP_TAGS or _is_chrome(tag):
+            tag.decompose()
 
 
 def _content_root(soup: BeautifulSoup):
-    """Pick the element holding the article text, without reading site chrome.
-
-    Sidebars, menus and boxes are dropped first, then the <main> or <article> wins
-    when present. Otherwise the whole <body> is read, so multi-chapter pages stay whole.
-    """
-    for tag in soup.find_all(attrs={"role": re.compile("navigation|complementary|banner|contentinfo")}):
-        tag.decompose()
-    for tag in soup.find_all(["aside", "menu"]):
-        tag.decompose()
-    for tag in soup.find_all(True):
-        if tag.parent is None or tag.name in ("html", "body", "main", "article"):
-            continue
-        tokens = [tag.get("id") or ""] + list(tag.get("class") or [])
-        if any(_CHROME_HINT.search(token) for token in tokens):
-            tag.decompose()
+    """The element holding the text: the first <main>, else the first <article>, else the body."""
     for name in ("main", "article"):
         found = soup.find(name)
         if found is not None:
             return found
     return soup.body or soup
+
+
+def _readable_text(root) -> str:
+    """Text with inline whitespace collapsed, line breaks at block boundaries and blank lines between paragraphs."""
+    out: List[str] = []
+    pending_break = 0
+    pending_space = False
+
+    def emit(raw: str) -> None:
+        nonlocal pending_break, pending_space
+        s = _WS.sub(" ", raw)
+        if not s:
+            return
+        if s == " ":
+            pending_space = True
+            return
+        lead, trail = s[0] == " ", s[-1] == " "
+        s = s.strip()
+        if pending_break:
+            out.append("\n" * pending_break)
+            pending_break = 0
+        elif (pending_space or lead) and out:
+            out.append(" ")
+        out.append(s)
+        pending_space = trail
+
+    def brk(n: int) -> None:
+        nonlocal pending_break
+        if out:
+            pending_break = max(pending_break, n)
+
+    # Iterative walk: deeply nested pages would overflow a recursive one
+    stack = [(root, False)]
+    while stack:
+        node, leaving = stack.pop()
+        if isinstance(node, NavigableString):
+            if not isinstance(node, PreformattedString):  # comments, doctypes and the like aren't text
+                emit(str(node))
+            continue
+        name = node.name
+        if name == "br":
+            brk(1)
+            continue
+        if name == "hr":
+            brk(2)
+            continue
+        size = 2 if name in _PARA_TAGS else 1 if name in _BLOCK_TAGS else 0
+        if size:
+            brk(size)
+        if not leaving:
+            stack.append((node, True))
+            stack.extend((child, False) for child in reversed(node.contents))
+    return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
 
 
 def _boundary_ms(boundary: dict) -> tuple:

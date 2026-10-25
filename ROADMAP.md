@@ -8,7 +8,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Paragraph chunking**~~ — Done: long text is split into paragraphs and synthesized in sequence with a progress bar
 - ~~**Batch synthesis**~~ — Done: tester's Batch panel turns `---`-separated texts into one zip of MP3s + SRT captions
 - ~~**Improved embed workflow**~~ — Done: Export → Standalone HTML is one file with audio, timings and player inlined
-- ~~**Cleaner "Load from URL"**~~ — Done: `/extract_text` drops sidebars, menus and boxes, then reads `<main>` or `<article>` when present, else the cleaned `<body>`. The Worker's version also skips MediaWiki boxes (Wikisource's header, "[edit]" links, categories), hidden elements and form controls; port those rules to Python so both servers read the same text
+- ~~**Cleaner "Load from URL"**~~ — Done: `/extract_text` drops sidebars, menus, boxes, MediaWiki chrome (Wikisource's header, "[edit]" links, categories), hidden elements and form controls, then reads `<main>` or `<article>` when present, else the cleaned `<body>`, with blank lines between paragraphs. The Python server and the Worker follow the same rules
 - ~~**"Load from URL" on the Cloudflare Worker**~~ — Done: `worker/src/extract.js`, a dependency-free extractor with the Python server's limits and messages, plus sidebar/menu/box, MediaWiki and hidden-element stripping
 - ~~**Test speech on the deployed Worker**~~ — Done (2026-10-25): `/synthesize` and `/synthesize_with_timing` return real audio and word timings from Cloudflare's servers
 - ~~**Make the Worker the tester's default API**~~ — Done: the tester defaults to the Worker, uses its own server when served by one, and greys out the formats the Worker can't produce
