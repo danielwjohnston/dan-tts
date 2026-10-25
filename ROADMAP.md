@@ -19,7 +19,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Books in the desktop app**~~ — Done: "Find books" on the home screen, and EPUB links and files open as books
 - ~~**Open any EPUB link or file**~~ — Done: paste an EPUB link into the Books search box, or open an EPUB file, in the extension and the desktop app
 - ~~**Run the extension's end-to-end tests in CI**~~ — Done: CI runs the Chromium and Firefox tests on every change
-- **Continue to next page** (extension) — near the end of a page that has a "next" link, offer to follow it and keep reading; remember the choice per site. Covers chapter-per-page books and multi-page articles anywhere
+- ~~**Continue to next page**~~ — Done: a page with a same-site "next" link offers it at the end of the text; "Always on this site" continues on its own. In the extension and the desktop app
 - ~~**Edge endpoint health check**~~ — Done: `.github/workflows/edge-health.yml` runs `scripts/edge-health.mjs` every six hours (voice list and a short synthesis, from Node and through the Worker) and keeps a GitHub issue open while it fails
 - **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
 

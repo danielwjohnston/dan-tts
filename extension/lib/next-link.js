@@ -27,7 +27,8 @@
     const best = own && !/^\W*$/.test(own) ? own : alt;
     if (best) return best.slice(0, 80);
     const u = new URL(url);
-    return decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || '') || u.hostname;
+    const last = u.pathname.split('/').filter(Boolean).pop() || '';
+    try { return decodeURIComponent(last) || u.hostname; } catch { return last || u.hostname; }
   }
 
   /**
@@ -38,6 +39,11 @@
    * @returns {{ url: string, label: string } | null}
    */
   function find(doc, base, currentUrl = base, opts = {}) {
+    // Never let a strange page break reading: no link is the worst outcome
+    try { return search(doc, base, currentUrl, opts); } catch (e) { console.warn('dan-tts: next-link failed', e); return null; }
+  }
+
+  function search(doc, base, currentUrl, opts) {
     let current;
     try { current = new URL(currentUrl); } catch { return null; }
     const resolve = (href) => {
