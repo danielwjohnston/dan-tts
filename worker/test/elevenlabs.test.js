@@ -81,7 +81,7 @@ test('ElevenLabs failures map to plain-language errors', async () => {
   await assert.rejects(run(402, {}), { status: 429 });
   await assert.rejects(run(400, { detail: { status: 'max_character_limit_exceeded' } }), { status: 422, message: /too long/ });
   await assert.rejects(run(429, { detail: 'slow down' }), { status: 429, message: /rate-limiting/ });
-  await assert.rejects(run(500, 'not json'), { status: 502, message: /HTTP 500/ });
+  await assert.rejects(synthesize('hi', 'eleven:21m00Tcm4TlvDq8ikWAM', { key: 'k', fetchImpl: async () => new Response('not json', { status: 500 }) }), { status: 502, message: /HTTP 500/ });
   await assert.rejects(run(200, { alignment: ALIGNMENT }), { status: 502, message: /no audio/ });
 });
 
@@ -101,4 +101,54 @@ test('sample serves the preview clip and 404s for unknown voices', async () => {
   assert.strictEqual(contentType, 'audio/mpeg');
   await assert.rejects(sample('k', 'eleven:zzzzzzzzzzzz', { fetchImpl }), { status: 404 });
   await assert.rejects(sample('k', 'eleven:cccccccccccc', { fetchImpl }), { status: 404, message: /no preview/ });
+});
+
+// ---- Review follow-ups ----
+
+test('network failures and unreadable bodies become 502/504, never a bare throw', async () => {
+  const voice = 'eleven:21m00Tcm4TlvDq8ikWAM';
+  const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  await assert.rejects(synthesize('hi', voice, { key: 'k', fetchImpl: async () => { throw timeout; } }), { status: 504, message: /timed out/ });
+  await assert.rejects(synthesize('hi', voice, { key: 'k', fetchImpl: async () => { throw new TypeError('fetch failed'); } }), { status: 502, message: /fetch failed/ });
+  await assert.rejects(synthesize('hi', voice, { key: 'k', fetchImpl: async () => new Response('<html>busy</html>', { status: 200 }) }), { status: 502, message: /unreadable response/ });
+  await assert.rejects(synthesize('hi', voice, { key: 'k', fetchImpl: async () => jsonRes({ audio_base64: '%%%not base64%%%' }) }), { status: 502, message: /unreadable audio/ });
+  await assert.rejects(listVoices('k', { fetchImpl: async () => { throw timeout; } }), { status: 504 });
+  await assert.rejects(listVoices('k', { fetchImpl: async () => new Response('null', { status: 200 }) }), { status: 502 });
+  // a non-JSON error body still maps by status
+  await assert.rejects(synthesize('hi', voice, { key: 'k', fetchImpl: async () => new Response('Bad gateway', { status: 500 }) }), { status: 502, message: /HTTP 500/ });
+});
+
+test('a rejected key keeps the provider\'s own explanation', async () => {
+  const fetchImpl = async () => jsonRes({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }, 401);
+  await assert.rejects(synthesize('hi', 'eleven:21m00Tcm4TlvDq8ikWAM', { key: 'k', fetchImpl }), { status: 502, message: /rejected the API key \(Invalid API key\)/ });
+});
+
+test('an invalid id is reported before a missing key, and length counts code points', async () => {
+  const fetchImpl = async () => { throw new Error('must not be called'); };
+  await assert.rejects(synthesize('hi', 'eleven:bad', { fetchImpl }), { status: 400 });
+  const emoji = '😀'.repeat(MAX_CHARS); // 2 UTF-16 units each, but MAX_CHARS code points: allowed
+  const fetchOk = async () => jsonRes({ audio_base64: AUDIO_B64, alignment: {} });
+  assert.strictEqual((await synthesize(emoji, 'eleven:21m00Tcm4TlvDq8ikWAM', { key: 'k', fetchImpl: fetchOk })).boundaries.length, 0);
+  await assert.rejects(synthesize(emoji + 'x', 'eleven:21m00Tcm4TlvDq8ikWAM', { key: 'k', fetchImpl: fetchOk }), { status: 422 });
+});
+
+test('word splitting matches the Python server on odd whitespace and multi-character entries', () => {
+  const t = (chars) => alignmentToBoundaries({ characters: chars, character_start_times_seconds: chars.map((_, i) => i / 10), character_end_times_seconds: chars.map((_, i) => (i + 1) / 10) }).map((b) => b.text);
+  assert.deepStrictEqual(t(['a', '﻿', 'b', ' ', 'c']), ['a', 'b', 'c']);        // BOM separates, on both servers
+  assert.deepStrictEqual(t(['a', '\u0085', 'b', ' ', 'c']), ['a\u0085b', 'c']);      // NEL does not, on both servers
+  assert.deepStrictEqual(t(['Hello ', 'world']), ['Hello world']);                    // a multi-character entry is never dropped
+  assert.deepStrictEqual(t(['Hi', '  ', 'there']), ['Hi', 'there']);
+});
+
+test('ticks round half up like the Python server', () => {
+  const b = alignmentToBoundaries({ characters: ['a'], character_start_times_seconds: [0.00000005], character_end_times_seconds: [0.00000025] });
+  assert.deepStrictEqual(b, [{ offset: 1, duration: 2, text: 'a' }]);
+});
+
+test('sample refuses a preview clip that is not served over https', async () => {
+  const fetchImpl = async (url) => {
+    if (url.startsWith('https://api.elevenlabs.io/v2/voices')) return jsonRes({ voices: [{ voice_id: 'aaaaaaaaaaaa', name: 'Adam', preview_url: 'http://169.254.169.254/latest/meta-data' }] });
+    throw new Error(`must not fetch ${url}`);
+  };
+  await assert.rejects(sample('k', 'eleven:aaaaaaaaaaaa', { fetchImpl }), { status: 502, message: /not https/ });
 });

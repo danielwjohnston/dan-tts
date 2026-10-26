@@ -374,7 +374,8 @@ def test_eleven_sample_serves_preview_clip(client, monkeypatch, tmp_path):
         return b"ID3preview"
 
     monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
-    monkeypatch.setattr(main, "list_voices", fake_voices)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_voice_cache", asyncio.run(fake_voices()))
     monkeypatch.setattr(main, "_eleven_fetch_bytes", fake_bytes)
     r = client.get(f"/samples/{ELEVEN_VOICE}")
     assert r.status_code == 200
@@ -383,3 +384,114 @@ def test_eleven_sample_serves_preview_clip(client, monkeypatch, tmp_path):
     assert client.get("/samples/eleven:cccccccccccc").status_code == 404
     assert client.get("/samples/eleven:zzzzzzzzzzzz").status_code == 404
     assert client.get("/samples/eleven:bad").status_code == 400
+
+
+def test_eleven_id_rejects_trailing_newline_and_checks_id_before_key(monkeypatch):
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("hi", "eleven:bad"))
+    assert e.value.status_code == 400  # same order as the Worker: id first, then key
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("hi", ELEVEN_VOICE + "\n"))
+    assert e.value.status_code == 400
+
+
+def test_alignment_matches_worker_on_odd_whitespace_and_rounding():
+    def words(chars):
+        n = len(chars)
+        al = {"characters": chars, "character_start_times_seconds": [i / 10 for i in range(n)], "character_end_times_seconds": [(i + 1) / 10 for i in range(n)]}
+        return [b["text"] for b in main._alignment_to_boundaries(al)]
+
+    assert words(["a", "﻿", "b", " ", "c"]) == ["a", "b", "c"]
+    assert words(["a", "\x85", "b", " ", "c"]) == ["a\x85b", "c"]
+    assert words(["Hello ", "world"]) == ["Hello world"]  # never dropped, same as the Worker
+    assert words(["Hi", "  ", "there"]) == ["Hi", "there"]
+    b = main._alignment_to_boundaries({"characters": ["a"], "character_start_times_seconds": [0.00000005], "character_end_times_seconds": [0.00000025]})
+    assert b == [{"offset": 1, "duration": 2, "text": "a"}]
+
+
+def test_eleven_rejected_key_keeps_provider_message():
+    exc = main._eleven_error(401, '{"detail": {"status": "invalid_api_key", "message": "Invalid API key"}}')
+    assert exc.status_code == 502
+    assert "(Invalid API key)" in exc.detail
+
+
+def test_eleven_synthesize_rejects_unreadable_audio(monkeypatch):
+    async def fake_request(method, path, json_body=None, timeout=60):
+        return {"audio_base64": "%%%", "alignment": {}}
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", fake_request)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("hi", ELEVEN_VOICE))
+    assert e.value.status_code == 502
+
+
+def test_voices_survive_a_malformed_elevenlabs_listing(monkeypatch):
+    async def fake_edge_list():
+        return [{"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US"}]
+
+    async def broken_listing():
+        raise TypeError("'NoneType' object is not iterable")
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_eleven_voices", broken_listing)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with TestClient(main.app) as c:
+        assert [v["shortName"] for v in c.get("/voices").json()] == ["en-US-AriaNeural"]
+
+
+def test_voices_refresh_clears_the_elevenlabs_cache(monkeypatch):
+    async def fake_edge_list():
+        return [{"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US"}]
+
+    calls = []
+
+    async def fake_eleven_voices():
+        calls.append(1)
+        return [{"name": "Adam", "shortName": "eleven:aaaaaaaaaaaa", "provider": "elevenlabs"}]
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_eleven_voices", fake_eleven_voices)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with TestClient(main.app) as c:
+        c.get("/voices")
+        c.get("/voices")
+        assert len(calls) == 1
+        c.get("/voices?refresh=1")
+        assert len(calls) == 2
+
+
+def test_eleven_sample_status_codes_match_the_worker(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "")
+    assert client.get(f"/samples/{ELEVEN_VOICE}").status_code == 503  # no key
+
+    async def rejected():
+        raise HTTPException(status_code=502, detail="ElevenLabs rejected the API key: check ELEVENLABS_API_KEY on the server")
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_voices", rejected)
+    r = client.get(f"/samples/{ELEVEN_VOICE}")
+    assert r.status_code == 502  # the listing's real error, not a 404
+    assert "rejected the API key" in r.json()["detail"]
+
+
+def test_eleven_preview_download_is_guarded(monkeypatch):
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_fetch_bytes("http://169.254.169.254/latest/meta-data"))
+    assert e.value.status_code == 502 and "https" in e.value.detail
+
+    async def private_host(url):
+        raise HTTPException(status_code=400, detail="URL host is not allowed")
+
+    monkeypatch.setattr(main, "_assert_public_host", private_host)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_fetch_bytes("https://10.0.0.1/clip.mp3"))
+    assert e.value.status_code == 502

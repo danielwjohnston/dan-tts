@@ -122,3 +122,44 @@ test('eleven: voices are rejected clearly when no key is configured', async () =
   assert.strictEqual((await call('/samples/eleven:aaaaaaaaaaaa')).status, 503);
   assert.strictEqual((await post('/synthesize', { text: 'Hi', voice: 'eleven:short' })).status, 400);
 });
+
+test('/voices cache is keyed by provider set and ?refresh=1 skips the lookup', async (t) => {
+  stubNetwork(t);
+  const store = new Map();
+  globalThis.caches = { default: { match: async (req) => store.get(req.url), put: async (req, res) => { store.set(req.url, res); } } };
+  let served = await callWith({}, '/voices').then((r) => r.json());
+  assert.deepStrictEqual(served.map((v) => v.provider), ['edge']);
+  served = await callWith(ELEVEN_ENV, '/voices').then((r) => r.json()); // the key was added: a different cache entry
+  assert.deepStrictEqual(served.map((v) => v.provider), ['edge', 'elevenlabs']);
+  assert.strictEqual(store.size, 2);
+  const keys = [...store.keys()];
+  assert.ok(keys.some((k) => k.includes('variant=edge%2Celevenlabs')) || keys.some((k) => k.includes('variant=edge,elevenlabs')));
+  await callWith(ELEVEN_ENV, '/voices?refresh=1');
+  assert.strictEqual(store.size, 2, 'refresh overwrites the existing entry rather than adding one');
+});
+
+test('ElevenLabs transport errors reach the client as 502/504 through the routes', async (t) => {
+  stubNetwork(t);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.startsWith('https://api.elevenlabs.io/v1/text-to-speech/')) throw Object.assign(new Error('aborted'), { name: 'TimeoutError' });
+    return realFetch(input);
+  };
+  const res = await callWith(ELEVEN_ENV, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'eleven:aaaaaaaaaaaa' }) });
+  assert.strictEqual(res.status, 504);
+  assert.match((await res.json()).detail, /timed out/);
+});
+
+test('ELEVENLABS_MODEL changes the model sent to ElevenLabs', async (t) => {
+  stubNetwork(t);
+  const realFetch = globalThis.fetch;
+  let body;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.startsWith('https://api.elevenlabs.io/v1/text-to-speech/')) body = JSON.parse(init.body);
+    return realFetch(input, init);
+  };
+  await callWith({ ...ELEVEN_ENV, ELEVENLABS_MODEL: 'eleven_turbo_v2_5' }, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'eleven:aaaaaaaaaaaa' }) });
+  assert.strictEqual(body.model_id, 'eleven_turbo_v2_5');
+});

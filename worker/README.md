@@ -38,8 +38,10 @@ Edge voices work with no setup. ElevenLabs voices appear as soon as the Worker h
 
 1. Get a key at elevenlabs.io → your profile → **API keys** → Create. The free plan gives 10,000 credits a month (about 10 minutes of speech) for non-commercial use with attribution; the number is on the Subscription page.
 2. Cloudflare dashboard → Workers & Pages → **dan-tts** → **Settings** → **Variables and Secrets** → **Add**. Type **Secret**, name `ELEVENLABS_API_KEY`, paste the key as the value, **Deploy**. A secret is hidden after saving; a plain variable is not, so pick Secret.
-3. Optional: a second entry (type Text is fine) `ELEVENLABS_MODEL`, for example `eleven_turbo_v2_5` for faster, cheaper speech. The default is `eleven_multilingual_v2`.
+3. Optional: a second entry `ELEVENLABS_MODEL`, also as type Secret, for example `eleven_turbo_v2_5` for faster, cheaper speech. The default is `eleven_multilingual_v2`. (A plain Text variable added in the dashboard is removed by the next Git deploy; secrets stay.)
 4. Check: `https://dan-tts.macdaddydwj.workers.dev/health` now says `"providers":["edge","elevenlabs"]`, and the tester lists the account's voices under "ElevenLabs voices", each with a free preview clip.
+
+Two things that look right but are not: a **Build variable** (Settings → Build) is only visible while the code is being built, never to the running Worker, so the key must be under **Variables and Secrets**; and a branch **preview** is a snapshot of the Worker's settings at the time it was built, so a secret added afterwards reaches the preview on the next push to that branch (production picks it up at once).
 
 Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
 

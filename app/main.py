@@ -8,6 +8,7 @@ import asyncio
 import base64
 import ipaddress
 import json
+import math
 import os
 import re
 import socket
@@ -45,7 +46,7 @@ VOICE_NAME_RE = re.compile(r"^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$")  # 
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
 ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
 ELEVEN_PREFIX = "eleven:"
-ELEVEN_ID_RE = re.compile(r"^eleven:[A-Za-z0-9_-]{8,64}$")
+ELEVEN_ID_RE = re.compile(r"^eleven:[A-Za-z0-9_-]{8,64}\Z")  # \Z: "$" would accept a trailing newline
 ELEVEN_MAX_CHARS = 5000  # per request; the tester splits long text into paragraphs anyway
 ELEVEN_API = "https://api.elevenlabs.io"
 
@@ -103,7 +104,7 @@ def _eleven_error(status: int, body: str) -> HTTPException:
     code = detail.get("status") if isinstance(detail, dict) else None
     message = detail.get("message") if isinstance(detail, dict) else (detail if isinstance(detail, str) else "")
     if status == 401 and code != "quota_exceeded":
-        return HTTPException(status_code=502, detail="ElevenLabs rejected the API key: check ELEVENLABS_API_KEY on the server")
+        return HTTPException(status_code=502, detail=f"ElevenLabs rejected the API key{f' ({message})' if message else ''}: check ELEVENLABS_API_KEY on the server")
     if code == "quota_exceeded" or status == 402:
         return HTTPException(status_code=429, detail="ElevenLabs credits for this month are used up. Edge voices still work; credits reset monthly")
     if code == "max_character_limit_exceeded":
@@ -121,22 +122,41 @@ async def _eleven_request(method: str, path: str, json_body: Optional[dict] = No
             async with session.request(method, f"{ELEVEN_API}{path}", json=json_body) as resp:
                 if resp.status != 200:
                     raise _eleven_error(resp.status, await resp.text())
-                return await resp.json()
+                try:
+                    data = await resp.json(content_type=None)
+                except (ValueError, aiohttp.ContentTypeError):
+                    data = None
+                if not isinstance(data, dict):
+                    raise HTTPException(status_code=502, detail="ElevenLabs returned an unreadable response")
+                return data
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail=f"ElevenLabs error: {exc}")
-    except asyncio.TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError):
         raise HTTPException(status_code=504, detail="ElevenLabs timed out")
 
 
 async def _eleven_fetch_bytes(url: str) -> bytes:
+    """Download a preview clip. The URL comes from the provider's listing, so it gets the same public-host
+    check as Load from URL, must be https, may not redirect, and is capped in size."""
+    if urlparse(url).scheme != "https":
+        raise HTTPException(status_code=502, detail="ElevenLabs preview URL is not https")
+    try:
+        await _assert_public_host(url)
+    except HTTPException:
+        raise HTTPException(status_code=502, detail="ElevenLabs preview URL points at a host this server will not fetch")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, allow_redirects=False) as resp:
                 if resp.status != 200:
                     raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: HTTP {resp.status}")
-                return await resp.read()
+                body = await resp.content.read(MAX_FETCH_BYTES + 1)
+                if len(body) > MAX_FETCH_BYTES:
+                    raise HTTPException(status_code=502, detail="ElevenLabs preview clip is too large")
+                return body
     except aiohttp.ClientError as exc:
         raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: {exc}")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="ElevenLabs preview timed out")
 
 
 def _title(s: str) -> str:
@@ -168,34 +188,48 @@ async def _eleven_voices() -> list[dict]:
     return out
 
 
+# An alignment entry that is only whitespace separates words. Same explicit class as worker/src/elevenlabs.js
+# (not str.isspace(), which disagrees with JavaScript's \s on a few code points), so both servers split alike.
+_WHITESPACE_ENTRY = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+
+
+def _ticks(seconds: float) -> int:
+    return math.floor(seconds * 1e7 + 0.5)  # half-up, like the Worker's Math.round-style rounding
+
+
 def _alignment_to_boundaries(alignment: dict) -> list[dict]:
     """Per-character times → one boundary per whitespace-separated word, in 100 ns ticks."""
     chars = alignment.get("characters") or []
     starts = alignment.get("character_start_times_seconds") or []
     ends = alignment.get("character_end_times_seconds") or []
+
+    def is_space(entry) -> bool:
+        return bool(_WHITESPACE_ENTRY.fullmatch(str(entry)))
+
     out = []
     i = 0
     while i < len(chars):
-        while i < len(chars) and chars[i].isspace():
+        while i < len(chars) and is_space(chars[i]):
             i += 1
         if i >= len(chars):
             break
         first = i
         text = ""
-        while i < len(chars) and not chars[i].isspace():
-            text += chars[i]
+        while i < len(chars) and not is_space(chars[i]):
+            text += str(chars[i])
             i += 1
-        offset = round((starts[first] if first < len(starts) else 0) * 1e7)
-        end_s = ends[i - 1] if i - 1 < len(ends) else (starts[first] if first < len(starts) else 0)
-        out.append({"offset": offset, "duration": max(0, round(end_s * 1e7) - offset), "text": text})
+        start_s = starts[first] if first < len(starts) else 0
+        offset = _ticks(start_s or 0)
+        end_s = ends[i - 1] if i - 1 < len(ends) and ends[i - 1] is not None else start_s
+        out.append({"offset": offset, "duration": max(0, _ticks(end_s or 0) - offset), "text": text})
     return out
 
 
 async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
-    if not ELEVENLABS_API_KEY:
-        raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")
     if not ELEVEN_ID_RE.match(voice):
         raise HTTPException(status_code=400, detail="Invalid voice name")
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")
     if len(text) > ELEVEN_MAX_CHARS:
         raise HTTPException(status_code=422, detail=f"Text is limited to {ELEVEN_MAX_CHARS} characters per request for ElevenLabs voices")
     voice_id = voice[len(ELEVEN_PREFIX):]
@@ -203,9 +237,14 @@ async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
         "POST", f"/v1/text-to-speech/{quote(voice_id)}/with-timestamps?output_format=mp3_44100_128",
         json_body={"text": text, "model_id": ELEVENLABS_MODEL},
     )
-    if not data.get("audio_base64"):
+    if not isinstance(data.get("audio_base64"), str) or not data["audio_base64"]:
         raise HTTPException(status_code=502, detail="ElevenLabs returned no audio")
-    return base64.b64decode(data["audio_base64"]), _alignment_to_boundaries(data.get("alignment") or data.get("normalized_alignment") or {})
+    try:
+        audio = base64.b64decode(data["audio_base64"], validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=502, detail="ElevenLabs returned unreadable audio")
+    alignment = data.get("alignment") or data.get("normalized_alignment") or {}
+    return audio, _alignment_to_boundaries(alignment if isinstance(alignment, dict) else {})
 
 
 async def synthesize_mp3(text: str, voice: str) -> bytes:
@@ -307,6 +346,17 @@ async def _eleven_voices_cached() -> list[dict]:
         except HTTPException as exc:
             print(f"ElevenLabs voice list unavailable: {exc.detail}")
             return []
+        except Exception as exc:  # a malformed listing must not take the Edge voices down with it
+            print(f"ElevenLabs voice list unavailable: {exc!r}")
+            return []
+    return _eleven_voice_cache
+
+
+async def _eleven_voices_strict() -> list[dict]:
+    """The ElevenLabs voices, or the real error when the listing fails (for /samples, which must say why)."""
+    global _eleven_voice_cache
+    if _eleven_voice_cache is None:
+        _eleven_voice_cache = await _eleven_voices()
     return _eleven_voice_cache
 
 
@@ -405,7 +455,9 @@ async def ensure_sample(voice: str) -> Path:
         return sample_path
     if voice.startswith(ELEVEN_PREFIX):
         # The provider's own preview clip, so a sample costs no credits
-        found = next((v for v in await list_voices() if v["shortName"] == voice), None)
+        if not ELEVENLABS_API_KEY:
+            raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")
+        found = next((v for v in await _eleven_voices_strict() if v["shortName"] == voice), None)
         if found is None:
             raise HTTPException(status_code=404, detail="No such ElevenLabs voice on this account")
         if not found.get("previewUrl"):

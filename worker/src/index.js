@@ -59,10 +59,16 @@ const pad = (n, w = 2) => String(n).padStart(w, '0');
 const stamp = (ms, sep) => `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}${sep}${pad(ms % 1000, 3)}`;
 const span = (b) => [Math.floor(b.offset / 10000), Math.floor((b.offset + b.duration) / 10000)];
 
-async function cached(request, ctx, ttlSeconds, make) {
+// Cache by URL plus an optional variant (the configured providers), so a settings change misses the old
+// entry. "?refresh=1" skips the lookup and overwrites the entry, like the Python server's refresh.
+async function cached(request, ctx, ttlSeconds, make, { variant = '' } = {}) {
   const cache = caches.default;
-  const key = new Request(new URL(request.url).toString(), { method: 'GET' });
-  const hit = await cache.match(key);
+  const url = new URL(request.url);
+  const refresh = url.searchParams.get('refresh') === '1';
+  url.searchParams.delete('refresh');
+  if (variant) url.searchParams.set('variant', variant);
+  const key = new Request(url.toString(), { method: 'GET' });
+  const hit = refresh ? null : await cache.match(key);
   if (hit) return hit;
   const res = await make();
   if (res.ok && res.headers.get('Cache-Control') !== 'no-store') {
@@ -90,7 +96,7 @@ async function route(request, env, ctx) {
         catch (e) { console.error(`ElevenLabs voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
       }
       return json(voices);
-    });
+    }, { variant: providers(env).join(',') });
   }
 
   const sample = path.match(/^\/samples\/([^/]+)$/);

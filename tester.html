@@ -333,6 +333,36 @@
       }
     };
 
+    /* The JSON bundle /export returns, built from what was just read */
+    async function localExportBundle() {
+      const audioB64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1]);
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(lastBlob);
+      });
+      const boundaries = wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text }));
+      const last = boundaries[boundaries.length - 1];
+      return {
+        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg', boundaries,
+        metadata: { words: boundaries.length, duration_ms: last ? Math.floor((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString().replace(/\.\d+Z$/, 'Z') },
+      };
+    }
+
+    /* SRT or WebVTT captions, one cue per word, formatted like the server's /export */
+    function captionsFrom(boundaries, format) {
+      const pad = (n, w = 2) => String(n).padStart(w, '0');
+      const sep = format === 'webvtt' ? '.' : ',';
+      const stamp = (ms) => `${pad(Math.floor(ms / 3600000))}:${pad(Math.floor(ms / 60000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}${sep}${pad(ms % 1000, 3)}`;
+      const lines = format === 'webvtt' ? ['WEBVTT', ''] : [];
+      boundaries.forEach((b, i) => {
+        const start = Math.floor(b.offset / 10000), end = Math.floor((b.offset + b.duration) / 10000);
+        if (format === 'srt') lines.push(String(i + 1));
+        lines.push(`${stamp(start)} --> ${stamp(end)}`, b.text, '');
+      });
+      return lines.join('\n');
+    }
+
     /* Self-contained HTML: audio, timings and the player inlined into one file */
     async function exportStandaloneHtml() {
       const audioB64 = await new Promise((resolve, reject) => {
@@ -464,9 +494,11 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
             parent.appendChild(opt);
           });
         });
-        if (favoriteVoice && allVoices.some(v => (v.shortName || v.name) === favoriteVoice)) {
+        const listed = (name) => !!name && allVoices.some(v => (v.shortName || v.name) === name);
+        if (listed(favoriteVoice)) {
           selectedVoiceName = favoriteVoice;
-        } else if (!selectedVoiceName && allVoices.length) {
+        } else if (!listed(selectedVoiceName) && allVoices.length) {
+          // This server does not have the voice chosen on the previous one: fall back to a listed voice
           selectedVoiceName = allVoices[0].shortName || allVoices[0].name;
         }
         voiceSelect.value = selectedVoiceName;
@@ -491,6 +523,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const sn = v.shortName || v.name;
         const card = document.createElement('div');
         card.className = 'card' + (sn === selectedVoiceName ? ' selected' : '');
+        card.dataset.voice = sn;
         card.onclick = (e) => {
           if (e.target.closest('.play-sample')) return;
           selectedVoiceName = sn;
@@ -571,11 +604,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     /* ---- Voice dropdown sync ---- */
     voiceSelect.addEventListener('change', () => {
       selectedVoiceName = voiceSelect.value;
-      document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
-      document.querySelectorAll('.card').forEach(c => {
-        const full = c.querySelector('.card-full');
-        if (full && full.textContent === selectedVoiceName) c.classList.add('selected');
-      });
+      document.querySelectorAll('.card').forEach(c => c.classList.toggle('selected', c.dataset.voice === selectedVoiceName));
     });
 
     /* ---- Word highlight rendering ---- */
@@ -849,37 +878,37 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         logEl.textContent = `Exporting ${format}...`;
         
         try {
-          const api = document.getElementById('api').value.trim().replace(/\/$/, '');
-          const res = await fetch(`${api}/export?format=${format}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: lastText, voice: lastVoice, format: lastExt })
-          });
-          
-          if (!res.ok) {
-            const msg = await res.text();
-            throw new Error(`HTTP ${res.status}: ${msg}`);
-          }
-          
-          if (format === 'json') {
-            const data = await res.json();
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = smartFilename(lastText, lastVoice, 'json');
-            a.click();
-            URL.revokeObjectURL(url);
-            logEl.textContent = `Exported JSON bundle (${data.metadata.words} words).`;
+          // Build the export from the audio and timings already in hand (the same shapes the server's
+          // /export returns): no second synthesis, so no second spend of ElevenLabs credits, and text that
+          // was read in chunks exports whole. The server is only asked when nothing has been read yet.
+          let data;
+          if (lastBlob && wordBoundaries.length) {
+            data = await localExportBundle();
           } else {
-            const ext = format === 'webvtt' ? 'vtt' : 'srt';
-            const blob = await res.blob();
+            const api = document.getElementById('api').value.trim().replace(/\/$/, '');
+            const res = await fetch(`${api}/export?format=json`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: lastText, voice: lastVoice, format: lastExt })
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+            data = await res.json();
+          }
+
+          const save = (blob, ext) => {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
             a.download = smartFilename(lastText, lastVoice, ext);
             a.click();
             URL.revokeObjectURL(url);
+          };
+          if (format === 'json') {
+            save(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), 'json');
+            logEl.textContent = `Exported JSON bundle (${data.metadata.words} words).`;
+          } else {
+            const ext = format === 'webvtt' ? 'vtt' : 'srt';
+            save(new Blob([captionsFrom(data.boundaries, format)], { type: format === 'webvtt' ? 'text/vtt' : 'application/x-subrip' }), ext);
             logEl.textContent = `Exported ${format === 'webvtt' ? 'WebVTT' : 'SRT'} captions.`;
           }
         } catch (err) {
