@@ -50,7 +50,7 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** the tester lists ElevenLabs voices beside Edge voices, reads with highlighting, exports captions; offline tests cover the adapter and routing on both servers; the health check lists voices from every configured provider; READMEs say where the key goes and what the free plan allows.
 
-**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Azure is next and needs a key.
+**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. The Azure half is built too, awaiting a key: `worker/src/azure.js` and the `_azure_*` helpers in `app/main.py` speak the engine's own protocol on Azure's endpoint (`engine/src/tts.js` takes a `connectionUrl`; the key goes in the `Ocp-Apim-Subscription-Key` header), list the region's English voices as `azure:<name>`, synthesize samples, carry a `/usage` note (Azure has no usage endpoint), and map errors to the same status codes on both servers, with offline tests against fake sockets. Secrets: `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`. Nothing has been spoken through Azure live yet; the health check's provider rule will cover it once a key is set.
 
 ### B. Markup editor
 

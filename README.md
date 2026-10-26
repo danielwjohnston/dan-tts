@@ -36,7 +36,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
+Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. Likewise, set `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` (for example `eastus`) and the region's English Azure AI Speech voices join as `azure:<name>`; Azure's free tier allows 500,000 characters a month, counted in the Azure portal. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The keys are only ever read on the server; see `worker/README.md` for the Cloudflare steps and what each free plan allows.
 
 ## Usage
 
@@ -95,7 +95,7 @@ on every push to `main` and preview every other branch; the build step assembles
 1. Sign in at https://render.com with GitHub (no card needed for the free plan).
 2. **New → Blueprint**, pick this repo, and click **Apply**.
 3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
-4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices.
+4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices, or `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` for Azure AI Speech voices.
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
 
