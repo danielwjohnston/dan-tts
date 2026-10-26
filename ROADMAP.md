@@ -2,6 +2,8 @@
 
 Future feature ideas, roughly prioritized. Nothing here is committed — just documented for reference.
 
+See [`docs/plan.md`](docs/plan.md) for the October 2026 plan: licensed voice providers behind one seam, the markup editor, server voices in the extension and app, an offline voice, and only then a public listing.
+
 ## Near-Term
 
 - ~~**SRT caption export**~~ — Done
@@ -42,7 +44,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Keep the Firefox add-on installed** — Firefox only keeps signed add-ons. Sign the build as an unlisted add-on in CI (`web-ext sign`, needs free addons.mozilla.org API keys as repository secrets) and attach the `.xpi` to releases
 - **Desktop auto-update** — after releases exist: check the latest release on start and offer to update (`electron-updater`)
 - **Phone** — the reader as an installable web app (PWA) that appears in the phone's Share menu, so "Share → dan-tts" reads an article. Needs the Worker (or another server) for page downloads and voice headers, since a web page can't set them itself
-- **Voice provider seam** — `provider: edge | azure` on the Worker and the Python server, the Azure AI Speech key kept as a server secret. Same voices, legitimately, with full SSML; free for 0.5 million characters a month. Required before any store or index listing (see the Edge terms decision)
+- **Voice provider seam** — `eleven:` (ElevenLabs, first) and `azure:` (Azure AI Speech, same engine protocol) voices next to Edge on the Worker and the Python server, keys kept as server secrets. Required before any store or index listing (see the Edge terms decision and `docs/plan.md` §3A)
 - **Offline voice** — a Piper voice (the `voice-training/` work) in the extension and the desktop app, with word timings for highlighting. No terms, no network; the other prerequisite for a public listing
 - **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
