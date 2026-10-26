@@ -60,3 +60,23 @@ html[data-theme="olive-dark"] {
   --avatar-m: linear-gradient(135deg, #606c38, #a3b06a);
   color-scheme: dark;
 }
+/* Bauhaus Lime Noir: Lime #00FF00 on Noir #000000, White #FFFFFF for reading, Lime deep #00B300,
+   Lime tint #1A331A, Graphite #262626 for dividers and cards, Muted #BFBFBF for captions.
+   Flat colour, square corners, Archivo (loaded by theme.js when the theme is chosen). */
+html[data-theme="bauhaus"] {
+  --bg: #000000; --bg2: #141414; --fg: #ffffff; --fg2: #bfbfbf; --border: #262626;
+  --primary: #00ff00; --primary-hover: #00b300; --primary-fg: #000000;
+  --card-bg: #0a0a0a; --card-shadow: rgba(0,0,0,0);
+  --input-bg: #000000; --highlight: #00ff00;
+  --avatar-f: #00ff00; --avatar-m: #ffffff;
+  color-scheme: dark;
+}
+html[data-theme="bauhaus"] body { font-family: Archivo, "Helvetica Neue", Arial, sans-serif; }
+html[data-theme="bauhaus"] h1 { font-weight: 900; font-stretch: 75%; text-transform: uppercase; letter-spacing: .02em; }
+html[data-theme="bauhaus"] :is(.btn, .icon-btn, .card, .filter-tab, .highlight-box, .export-menu, .export-option, .loading-bar, .loading-bar .bar, .clear-btn, .word, .tts-highlight, .tts-word, select, input, textarea) { border-radius: 0; }
+html[data-theme="bauhaus"] :is(.btn-secondary, .icon-btn, .filter-tab) { border-color: #ffffff; }
+html[data-theme="bauhaus"] .btn-primary { font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+html[data-theme="bauhaus"] .card { border-color: #262626; }
+html[data-theme="bauhaus"] .card.selected { border-color: #00ff00; box-shadow: none; }
+html[data-theme="bauhaus"] .avatar { color: #000000; }
+html[data-theme="bauhaus"] :is(.highlight-box .word.active, .tts-word.active) { color: #000000; }
