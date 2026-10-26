@@ -94,6 +94,16 @@ test('lower() accepts a voice id in place of a provider name', () => {
   assert.strictEqual(lower('a [pause] b', 'en-US-AriaNeural'), 'a, b');
 });
 
+test('Azure ids are their own provider, lowered like Edge for now (punctuation pauses, no tags)', () => {
+  assert.strictEqual(providerOf('azure:en-US-JennyNeural'), 'azure');
+  assert.strictEqual(providerOf('AZURE:en-GB-SoniaNeural'), 'azure');
+  assert.strictEqual(lower('a [pause] b', 'azure:en-US-JennyNeural'), 'a, b');
+  assert.strictEqual(lower('Turn left [pause 2s] at the mill.', 'azure'), 'Turn left.\n\nat the mill.');
+  assert.strictEqual(lower('the kernel[say: Ker-nel] panicked', 'azure'), 'the Ker-nel panicked');
+  assert.strictEqual(lower('a < b [pause] c', 'azure'), 'a < b, c');
+  assert.strictEqual(strip('a [pause] b'), 'a b');
+});
+
 test('strip() returns token-free text exactly as it was, and tidies only around removed tokens', () => {
   for (const t of ['Bonjour ! Comment ça va ?', 'End.  Next sentence.', 'a , b', 'a [pause .5s] b', '  indented\n', 'x[say: a [b] c] d']) {
     assert.strictEqual(strip(t), t);

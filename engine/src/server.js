@@ -16,7 +16,7 @@ export function serverFor(setting) {
   return String(setting).trim().replace(/\/+$/, '');
 }
 
-const LABELS = { elevenlabs: 'ElevenLabs' };
+const LABELS = { elevenlabs: 'ElevenLabs', azure: 'Azure' };
 export const providerLabel = (provider) => LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Server');
 
 /** The server's own explanation of a failure ({"detail": "..."}), else the status. */

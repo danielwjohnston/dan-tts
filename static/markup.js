@@ -9,22 +9,25 @@
 // token cannot swallow the paragraphs after it. Edge voices take no SSML, so a pause becomes
 // punctuation (a comma, a full stop, or a paragraph break, which the tester then synthesizes as
 // its own request) and a respelling replaces the word; ElevenLabs takes an inline
-// <break time="0.4s" /> tag (3 s at most) and the same respellings. strip() gives the written
-// text with the tokens removed; nothing displays it yet (highlighting and captions show the
-// spoken words), it is here for the display and caption path to come. The *Edit helpers at the
-// end build the edits behind the tester's toolbar buttons; previewSlice() picks the text a preview reads.
+// <break time="0.4s" /> tag (3 s at most) and the same respellings. Azure voices are lowered
+// like Edge for now; Azure takes full SSML, so real break tags (and more) can follow once the
+// server passes SSML through. strip() gives the written text with the tokens removed; nothing
+// displays it yet (highlighting and captions show the spoken words), it is here for the display
+// and caption path to come. The *Edit helpers at the end build the edits behind the tester's
+// toolbar buttons; previewSlice() picks the text a preview reads.
 (function (root) {
   const PAUSE_DEFAULT = 400, PAUSE_MIN = 100, PAUSE_MAX = 5000, ELEVEN_BREAK_MAX = 3000;
   const TOKEN = /\[pause(?:[ \t]+(\d+(?:\.\d+)?)[ \t]*(ms|s))?[ \t]*\]|\[(say|spell):[ \t]*([^\[\]\n]*?)[ \t]*\]/gi;
   // The word a respelling applies to: the run before the token, split into its core and the
   // punctuation glued to its end (kept in both the written and the spoken text)
   const WORD_BEFORE = /(\S*?)([^\p{L}\p{N}\s]*)$/u;
-  const PROVIDERS = ['edge', 'elevenlabs'];
+  const PROVIDERS = ['edge', 'elevenlabs', 'azure'];
   const str = (v) => (v == null ? '' : String(v));
 
-  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, anything else is Edge. */
+  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, "azure:<name>" is Azure, anything else is Edge. */
   function providerOf(voice) {
-    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : 'edge';
+    const v = str(voice);
+    return /^eleven:/i.test(v) ? 'elevenlabs' : /^azure:/i.test(v) ? 'azure' : 'edge';
   }
 
   /** Text → segments: {type:'text', text} | {type:'pause', ms} | {type:'say', written, spoken} | {type:'spell', letters}. */
@@ -112,7 +115,7 @@
       const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
       if (!rest || !out.trim()) return; // nothing is spoken after it, or before it
       if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
-      else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
+      else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms); // Edge, and Azure until SSML goes through
     });
     return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
   }

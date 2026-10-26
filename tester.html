@@ -157,7 +157,7 @@
         <textarea id="text">Hello world from Dan's TTS Project.</textarea>
         <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs voices get real pauses.">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge and Azure voices get punctuation for pauses; ElevenLabs voices get real pauses.">
         <input type="checkbox" id="markup" style="width:auto;margin:0;"> Markup tokens <span style="opacity:.8">([pause 800ms], word[say: respelling], [spell: ABC])</span>
       </label>
       <div class="markup-tools" id="markup-tools" hidden>
@@ -465,20 +465,23 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
     // Edge voices have names like en-US-AriaNeural; provider voices carry their own display name
-    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices' };
+    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices', azure: 'Azure voices' };
     const providerOf = (v) => v.provider || 'edge';
     const displayName = (v) => providerOf(v) === 'edge' ? friendlyName(v.shortName) : (v.name || v.shortName);
     const voiceDetail = (v) => providerOf(v) === 'edge' ? (v.shortName || '') : [PROVIDER_LABELS[providerOf(v)] || providerOf(v), v.localeName].filter(Boolean).join(' · ');
     const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
-    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
+    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution).';
+    const AZURE_NOTE = 'Azure voices use that Speech resource\u2019s quota (free tier: 500,000 characters a month; usage is shown in the Azure portal, not here).';
+    // The note under the voice picker: one sentence per paid provider the server lists, then the Edge one
+    const providerNote = (elevenText) => [serverProviders.includes('elevenlabs') ? elevenText : '', serverProviders.includes('azure') ? AZURE_NOTE : '', 'Edge voices have no quota.'].filter(Boolean).join(' ');
     function showProviderNote() {
       const note = document.getElementById('provider-note');
-      const eleven = serverProviders.includes('elevenlabs');
-      note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
-      if (eleven) showUsage();
+      const paid = serverProviders.some((p) => p !== 'edge');
+      note.style.display = paid ? '' : 'none';
+      note.textContent = paid ? providerNote(GENERIC_ELEVEN_NOTE) : '';
+      if (serverProviders.includes('elevenlabs')) showUsage();
     }
     /* Live credit count from /usage, replacing the generic note when the server can report it */
     async function showUsage() {
@@ -491,8 +494,8 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const n = (x) => x.toLocaleString();
         const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
         const minutes = Math.round(u.remaining / 1000);
-        document.getElementById('provider-note').textContent =
-          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset} Edge voices have no quota.`;
+        document.getElementById('provider-note').textContent = providerNote(
+          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset}`);
       } catch (e) { /* the generic note stays */ }
     }
 
