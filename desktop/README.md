@@ -41,7 +41,7 @@ npm start
 - The window runs the extension's reader code unchanged: `content.js`, `offscreen.js`, `pdf-reader.*`, `book.*` and `lib/`. `src/chrome-shim.js` stands in for the `chrome.*` extension APIs. `scripts/sync-desktop.mjs` assembles `app/` from `../extension` and `src/` before every start, test and build, so fixes made to the extension reach the app automatically.
 - **Locked down:** context isolation, sandbox, no Node.js in the window, and a strict Content-Security-Policy. The only bridge to the main process is `danDesktop.fetch(url)` for `http`/`https` addresses. Every permission request (camera, microphone and so on) is denied, and links to the web open in your normal browser.
 - Your library, settings and saved text stay on your computer, in the app's data folder.
-- **Server voices:** like the extension, the picker lists provider voices (for example ElevenLabs) from the project's voice server next to the Edge voices; the Edge voices never go through a server. The server is the `chrome.sync.server` setting (default: the Cloudflare Worker).
+- **Server voices:** like the extension, the picker lists provider voices (for example ElevenLabs) from the project's voice server next to the Edge voices; Edge voices are spoken by Microsoft's service directly and never go through the project's server. The server is the `chrome.sync.server` setting (default: the Cloudflare Worker); the app has no settings page for it yet, so changing it means editing that stored value.
 
 ## Test
 

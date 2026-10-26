@@ -17,9 +17,9 @@
 <body>
   <h2>dan-tts Reader</h2>
   <label for="server">Voice server</label>
-  <input id="server" type="url" placeholder="https://dan-tts.macdaddydwj.workers.dev" spellcheck="false" autocomplete="off">
-  <p>Edge voices are spoken straight from your browser and never go through a server. Voices from other providers (for example ElevenLabs) come from this server, which holds the provider's key; the text being read is sent to it, and the provider's credits are used. Leave the field empty to list Edge voices only.</p>
+  <input id="server" type="url" placeholder="Empty: Edge voices only" spellcheck="false" autocomplete="off">
+  <p>Edge voices are spoken by Microsoft's Edge voice service straight from your browser and never go through this server. Voices from other providers (for example ElevenLabs) come from this server, which holds the provider's key; the text being read is sent to it, and the provider's credits are used. Leave the field empty to list Edge voices only. Default: <code id="default-url"></code>.</p>
   <button id="save">Save</button><span id="saved" role="status"></span>
-  <script src="options.js"></script>
+  <script type="module" src="options.js"></script>
 </body>
 </html>

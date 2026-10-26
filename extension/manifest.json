@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "dan-tts Reader",
   "version": "0.1.0",
-  "description": "Read any page or selection aloud with Microsoft's natural voices, with word highlighting. No server, no account.",
+  "description": "Read any page or selection aloud with natural voices and word highlighting. Edge voices need no server or account; optional provider voices use your own voice server.",
   "minimum_chrome_version": "116",
   "background": {
     "service_worker": "background.js",

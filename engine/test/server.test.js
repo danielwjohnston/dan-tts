@@ -62,3 +62,10 @@ test('synthesizeServer surfaces the server\'s reason and refuses when turned off
   await assert.rejects(run({ audio: '%%%', boundaries: [] }), { message: /unreadable audio/ });
   await assert.rejects(synthesizeServer('x', { voice: 'eleven:aaaaaaaaaaaa', server: '' }), { message: /turned off/ });
 });
+
+test('an unreachable or silent server is reported in plain words, naming the host', async () => {
+  const down = async () => { throw new TypeError('fetch failed'); };
+  await assert.rejects(listServerVoices('http://127.0.0.1:9/', { fetchImpl: down }), { message: /Could not reach the voice server \(127\.0\.0\.1:9\)\. Pick an Edge voice/ });
+  const slow = async () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); };
+  await assert.rejects(synthesizeServer('x', { voice: 'eleven:aaaaaaaaaaaa', server: 'https://voices.example', fetchImpl: slow }), { message: /did not answer in time \(voices\.example\)/ });
+});

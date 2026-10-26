@@ -137,18 +137,21 @@ async function getEdgeVoices() {
 }
 
 // A server that is off, unreachable or has no providers adds nothing: the Edge voices still list.
-// An empty answer is kept for an hour only, so a key added on the server shows up soon.
+// The listing waits at most 5 s so it cannot hold the picker back for long; an empty answer is kept
+// for an hour (a key added on the server shows up soon) and a failure for five minutes.
+const SERVER_VOICES_TTL = { ok: 86400000, empty: 3600000, failed: 300000 };
 async function getServerVoices() {
   const base = serverFor((await chrome.storage.sync.get('server')).server);
   if (!base) return [];
   const { serverVoiceCache: c } = await chrome.storage.local.get('serverVoiceCache');
-  if (c && c.server === base && Date.now() - c.at < (c.voices.length ? 86400000 : 3600000)) return c.voices;
+  if (c && c.server === base && Date.now() - c.at < SERVER_VOICES_TTL[c.failed ? 'failed' : c.voices.length ? 'ok' : 'empty']) return c.voices;
   try {
-    const voices = await listServerVoices(base);
+    const voices = await listServerVoices(base, { timeoutMs: 5000 });
     await chrome.storage.local.set({ serverVoiceCache: { at: Date.now(), server: base, voices } });
     return voices;
   } catch (e) {
     console.warn('Voice server unavailable:', e.message);
+    await chrome.storage.local.set({ serverVoiceCache: { at: Date.now(), server: base, voices: [], failed: true } });
     return [];
   }
 }

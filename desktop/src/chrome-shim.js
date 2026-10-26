@@ -24,21 +24,24 @@
     localStorage.setItem('dan.voiceCache', JSON.stringify({ at: Date.now(), voices: list }));
     return list;
   }
-  // Same rules as the extension's background: an unreachable server adds nothing, an empty answer is kept an hour
+  // Same rules as the extension's background: the listing waits at most 5 s; an unreachable server adds
+  // nothing and is remembered for five minutes, an empty answer for an hour, a real list for a day
+  const SERVER_VOICES_TTL = { ok: 86400000, empty: 3600000, failed: 300000 };
   async function serverVoices() {
     const { serverFor, listServerVoices } = await import(ROOT + 'engine/server.js');
     const base = serverFor((await area('sync').get('server')).server);
     if (!base) return [];
     try {
       const c = JSON.parse(localStorage.getItem('dan.serverVoiceCache') || 'null');
-      if (c && c.server === base && Date.now() - c.at < (c.voices.length ? 86400000 : 3600000)) return c.voices;
+      if (c && c.server === base && Date.now() - c.at < SERVER_VOICES_TTL[c.failed ? 'failed' : c.voices.length ? 'ok' : 'empty']) return c.voices;
     } catch {}
     try {
-      const list = await listServerVoices(base);
+      const list = await listServerVoices(base, { timeoutMs: 5000 });
       localStorage.setItem('dan.serverVoiceCache', JSON.stringify({ at: Date.now(), server: base, voices: list }));
       return list;
     } catch (e) {
       console.warn('Voice server unavailable:', e.message);
+      localStorage.setItem('dan.serverVoiceCache', JSON.stringify({ at: Date.now(), server: base, voices: [], failed: true }));
       return [];
     }
   }
@@ -107,10 +110,19 @@
     if (/^https?:/i.test(url) && !/^https:\/\/speech\.platform\.bing\.com\//.test(url) && (method === 'GET' || method === 'POST')) {
       let r;
       try {
-        r = method === 'GET'
-          ? await window.danDesktop.fetch(url)
-          : await window.danDesktop.fetch(url, { method, headers: Object.fromEntries(new Headers(init.headers || {})), body: typeof init.body === 'string' ? init.body : '' });
+        const ipc = method === 'GET'
+          ? window.danDesktop.fetch(url)
+          : window.danDesktop.fetch(url, { method, headers: Object.fromEntries(new Headers(init.headers || {})), body: typeof init.body === 'string' ? init.body : '' });
+        // The main process cannot be cancelled, but the caller's timeout (AbortSignal.timeout) still fires on time
+        const signal = init?.signal;
+        r = signal
+          ? await Promise.race([ipc, new Promise((_, reject) => {
+              const abort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+              if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+            })])
+          : await ipc;
       } catch (err) {
+        if (err instanceof DOMException) throw err; // a timeout or abort, as native fetch would report it
         // Like a browser's fetch: a network failure is a TypeError, with a readable message
         // instead of "Error invoking remote method 'dan:fetch': Error: net::ERR_TIMED_OUT"
         const raw = String(err.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');

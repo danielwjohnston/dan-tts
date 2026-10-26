@@ -25,6 +25,18 @@ async function reason(res) {
   return `HTTP ${res.status}`;
 }
 
+const hostOf = (url) => { try { return new URL(url).host; } catch { return url; } };
+
+/** fetch whose network failures say which server could not be reached and what to do about it. */
+async function reach(fetchImpl, base, path, init) {
+  try {
+    return await fetchImpl(`${base}${path}`, init);
+  } catch (e) {
+    const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+    throw new Error(`${timedOut ? 'The voice server did not answer in time' : 'Could not reach the voice server'} (${hostOf(base)}). Pick an Edge voice, or check the server on the options page.`);
+  }
+}
+
 /**
  * Provider voices from the server, in the shape the reader's voice picker uses for Edge
  * voices (capitalised fields) plus Provider. Edge voices are left out: the reader lists those itself.
@@ -32,7 +44,7 @@ async function reason(res) {
 export async function listServerVoices(server, { fetchImpl = globalThis.fetch, timeoutMs = 20000 } = {}) {
   const base = serverFor(server);
   if (!base) return [];
-  const res = await fetchImpl(`${base}/voices`, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await reach(fetchImpl, base, '/voices', { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) throw new Error(`Voice server: ${await reason(res)}`);
   const list = await res.json();
   if (!Array.isArray(list)) throw new Error('Voice server returned an unexpected voice list');
@@ -48,7 +60,7 @@ export async function listServerVoices(server, { fetchImpl = globalThis.fetch, t
 export async function synthesizeServer(text, { voice, server, fetchImpl = globalThis.fetch, timeoutMs = 90000 } = {}) {
   const base = serverFor(server);
   if (!base) throw new Error('Server voices are turned off (no voice server is set)');
-  const res = await fetchImpl(`${base}/synthesize_with_timing`, {
+  const res = await reach(fetchImpl, base, '/synthesize_with_timing', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text, voice, format: 'mp3' }),

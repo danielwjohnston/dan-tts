@@ -9,6 +9,7 @@
   const PROVIDER_LABELS = { elevenlabs: 'ElevenLabs' };
   const isServerVoice = (v) => /^[a-z][a-z0-9]*:/i.test(v || '');
   const voiceLabel = (v) => isServerVoice(v) ? 'Server voice' : v;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const toPlayer = (cmd, data = {}) => chrome.runtime.sendMessage({ target: 'player', cmd, ...data });
 
   // ---- State ----
@@ -80,7 +81,7 @@
         <button class="play" title="Play/Pause (Space)">▶</button>
         <button class="next" title="Next paragraph (→)">⏭</button>
         <select class="speed" title="Speed"></select>
-        <select class="voice" title="Voice"><option>${voiceLabel(settings.voice)}</option></select>
+        <select class="voice" title="Voice"><option>${esc(voiceLabel(settings.voice))}</option></select>
         <span class="status"></span>
         <button class="restart" title="Start from the beginning">⟲</button>
         <button class="close" title="Close (Esc)">✕</button>
@@ -96,7 +97,7 @@
   const ready = chrome.storage.sync.get(['voice', 'rate', 'server']).then((s) => {
     Object.assign(settings, Object.fromEntries(Object.entries(s).filter(([, v]) => v != null)));
     speedSel.value = String(settings.rate);
-    voiceSel.innerHTML = `<option value="${settings.voice}">${voiceLabel(settings.voice)}</option>`;
+    voiceSel.innerHTML = `<option value="${esc(settings.voice)}">${esc(voiceLabel(settings.voice))}</option>`;
   });
   // The settings page may change the voice server while a page is open
   chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -109,7 +110,6 @@
     const res = await chrome.runtime.sendMessage({ target: 'background', cmd: 'voices' });
     if (!res?.voices) return;
     voicesLoaded = true;
-    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const lang = (navigator.language || 'en-US').split('-')[0];
     // Provider voices (from the voice server) in their own groups first, then Edge voices by language
     const byProvider = {}, byLocale = {};
@@ -131,6 +131,11 @@
       ...locales.map((loc) => group(loc, byLocale[loc])),
     ].join('');
     voiceSel.value = settings.voice;
+    // The stored voice is not on this list (a server voice with the server off or unreachable): keep showing it
+    if (voiceSel.value !== settings.voice) {
+      voiceSel.insertAdjacentHTML('afterbegin', `<option value="${esc(settings.voice)}">${esc(voiceLabel(settings.voice))} (unavailable)</option>`);
+      voiceSel.value = settings.voice;
+    }
   }
 
   // ---- Text extraction ----

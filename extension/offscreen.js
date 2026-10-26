@@ -17,6 +17,7 @@ let current = -1;
 let cache = new Map(); // chunk index -> Promise<{ url, boundaries }>
 let cacheGen = 0;      // bumps when the cache is cleared (new text or voice)
 let boundaries = [];
+let prefetched = -1;   // chunk whose successor a server-voice prefetch was already requested for
 let lastWord = -1;
 let ticker = null;
 
@@ -50,9 +51,14 @@ async function playChunk(i, startTicks = 0) {
   if (i < 0 || i >= chunks.length) { stopTicker(); toTab('ended'); return; }
   const mine = session;
   current = i;
+  prefetched = -1;
   toTab('state', { state: 'loading', chunk: i, total: chunks.length });
   let r;
-  try { r = await synth(i); } catch (e) { toTab('error', { message: e.message }); return; }
+  try { r = await synth(i); } catch (e) {
+    if (mine === session) audio.removeAttribute('src'); // so Play retries this chunk instead of replaying the last one
+    toTab('error', { message: e.message });
+    return;
+  }
   if (mine !== session || !r) return;
   // Prefetch the next chunk. Server voices cost credits, so for those it waits until this chunk is
   // mostly played (see the ticker), rather than paying for a chunk the listener may never reach.
@@ -81,7 +87,10 @@ function startTicker() {
       if (boundaries[k].offset <= t) idx = k; else break;
     }
     if (idx !== lastWord) { lastWord = idx; toTab('word', { chunk: current, word: idx }); }
-    if (isServerVoice(voice) && current + 1 < chunks.length && audio.duration && audio.currentTime > audio.duration * 0.7) synth(current + 1).catch(() => {});
+    if (isServerVoice(voice) && prefetched !== current && current + 1 < chunks.length && audio.duration && audio.currentTime > audio.duration * 0.7) {
+      prefetched = current; // one attempt per chunk, even if it fails
+      synth(current + 1).catch(() => {});
+    }
   }, 40);
 }
 function stopTicker() { clearInterval(ticker); ticker = null; }
