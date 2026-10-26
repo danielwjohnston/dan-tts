@@ -33,7 +33,7 @@ async function reach(fetchImpl, base, path, init) {
     return await fetchImpl(`${base}${path}`, init);
   } catch (e) {
     const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-    throw new Error(`${timedOut ? 'The voice server did not answer in time' : 'Could not reach the voice server'} (${hostOf(base)}). Pick an Edge voice, or check the server on the options page.`);
+    throw new Error(`${timedOut ? 'The voice server did not answer in time' : 'Could not reach the voice server'} (${hostOf(base)}). Pick an Edge voice, or check the voice server setting.`);
   }
 }
 
