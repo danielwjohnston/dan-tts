@@ -74,6 +74,7 @@ test('Edge pauses become punctuation that fits what is already there', () => {
   assert.strictEqual(lower('The end [pause]', 'edge'), 'The end');
   assert.strictEqual(lower('[pause 2s]', 'edge'), '');
   assert.strictEqual(lower('The end [pause]', 'elevenlabs'), 'The end');
+  assert.strictEqual(lower('[pause 1.5s] a b', 'elevenlabs'), 'a b');
 });
 
 test('ElevenLabs pauses become break tags, capped at three seconds', () => {

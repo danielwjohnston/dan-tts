@@ -110,7 +110,7 @@
       const glued = next && next.type === 'text' ? next.text.match(/^[ \t]*([,.;:!?]+["')\]]*)/) : null;
       if (glued) { out = out.replace(/[ \t]+$/, '') + glued[1]; next.text = next.text.slice(glued[0].length); }
       const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
-      if (!rest) return; // nothing is spoken after it
+      if (!rest || !out.trim()) return; // nothing is spoken after it, or before it
       if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
       else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
     });
