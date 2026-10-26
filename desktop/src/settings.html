@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' https://speech.platform.bing.com wss://speech.platform.bing.com https://cdn.jsdelivr.net blob: data:">
+  <title>Settings – dan-tts Reader</title>
+  <link rel="stylesheet" href="desktop.css">
+  <script src="chrome-shim.js"></script>
+</head>
+<body>
+  <div class="topbar"><a href="home.html">← Home</a></div>
+  <main>
+    <h1>Settings</h1>
+    <p class="sub">Settings stay on this computer.</p>
+
+    <form class="card settings" id="server-form">
+      <label for="server"><strong>Voice server</strong></label>
+      <p>Edge voices are spoken by Microsoft's Edge voice service straight from this app and never go through this server. Voices from other providers (for example ElevenLabs) come from this server, which holds the provider's key; the text being read is sent to it, and the provider's credits are used. Leave the field empty to list Edge voices only. Default: <code id="default-url"></code>.</p>
+      <div class="row"><input type="url" id="server" placeholder="Empty: Edge voices only" spellcheck="false" autocomplete="off" aria-label="Voice server address"><button type="submit" id="save">Save</button></div>
+      <div class="status" id="status" role="status"></div>
+    </form>
+  </main>
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

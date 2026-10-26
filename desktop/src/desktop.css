@@ -4,6 +4,8 @@
 body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 780px; margin: 0 auto; padding: 36px 20px 64px; }
 h1 { font-size: 28px; margin: 0 0 4px; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.heading .button { padding: 6px 12px; font-size: 14px; }
 h2 { font-size: 17px; margin: 32px 0 10px; }
 .sub { color: var(--muted); margin: 0 0 24px; line-height: 1.5; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
@@ -17,6 +19,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .actions .card strong { display: block; margin-bottom: 4px; }
 .actions .card p { color: var(--muted); margin: 0 0 12px; font-size: 14px; }
 .drop.over { border-color: var(--accent); }
+.settings label { display: block; margin-bottom: 4px; }
+.settings p { color: var(--muted); margin: 0 0 12px; font-size: 14px; line-height: 1.5; }
+.settings code { font-size: 13px; word-break: break-all; }
 .status { color: var(--muted); min-height: 1.4em; margin-top: 10px; }
 .status.error { color: #e5484d; }
 ul.library { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
