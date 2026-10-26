@@ -3,7 +3,7 @@
 // Optional: PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs, HTTPS_PROXY to reach the internet.
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -13,6 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktop = join(here, '..');
 const fixtures = join(desktop, '..', 'extension', 'test', 'fixtures');
 const { _electron: electron } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { DEFAULT_SERVER } = await import(pathToFileURL(join(desktop, '..', 'engine', 'src', 'server.js')).href); // the app runs a copy of it
 const electronPath = createRequire(import.meta.url)('electron'); // path to the binary
 
 const server = createServer((req, res) => {
@@ -158,6 +159,36 @@ try {
   await win.locator('#library li', { hasText: 'Saved text' }).locator('a').click();
   await waitActive();
   check('reopening saved text resumes it', /Resumed/.test(await shadow(`return root.querySelector('.status').textContent;`)));
+
+  // 7. Settings: the voice server. The shim keeps chrome.storage.sync in localStorage ("chrome.sync.<key>")
+  // and the server's voice list in localStorage "dan.serverVoiceCache"
+  const stored = () => win.evaluate(() => ({ server: localStorage.getItem('chrome.sync.server'), voice: localStorage.getItem('chrome.sync.voice'), cache: localStorage.getItem('dan.serverVoiceCache') }));
+  await win.goto('app://reader/home.html');
+  await win.click('#settings');
+  await win.waitForURL('app://reader/settings.html');
+  await win.waitForFunction(() => document.getElementById('server').value !== '');
+  check('Settings opens from the home screen and shows the default voice server', (await win.inputValue('#server')) === DEFAULT_SERVER && (await win.textContent('#default-url')) === DEFAULT_SERVER && /Settings/.test(await win.title()), await win.inputValue('#server'));
+  await win.evaluate(() => { localStorage.setItem('chrome.sync.voice', JSON.stringify('eleven:testvoice01')); localStorage.setItem('dan.serverVoiceCache', JSON.stringify({ at: Date.now(), server: 'x', voices: [] })); });
+  await win.fill('#server', 'ftp://example.com');
+  await win.click('#save');
+  check('an address without http:// or https:// is refused', (await win.evaluate(() => document.getElementById('server').validationMessage)) !== '' && (await stored()).server === null);
+  await win.fill('#server', `${origin}/`); // the trailing slash is dropped
+  await win.click('#save');
+  await win.waitForFunction((o) => localStorage.getItem('chrome.sync.server') === JSON.stringify(o), origin);
+  const s1 = await stored();
+  check('saving a local server stores it and clears the server voice cache', s1.server === JSON.stringify(origin) && s1.cache === null && s1.voice === '"eleven:testvoice01"' && (await win.inputValue('#server')) === origin, JSON.stringify(s1));
+  await win.fill('#server', '');
+  await win.click('#save');
+  await win.waitForFunction(() => localStorage.getItem('chrome.sync.server') === '""');
+  const s2 = await stored();
+  check('saving an empty field turns server voices off and resets a provider voice to Aria', s2.server === '""' && s2.voice === '"en-US-AriaNeural"' && /Edge voices only \(voice reset to Aria\)/.test(await win.textContent('#status')), `${JSON.stringify(s2)} status "${await win.textContent('#status')}"`);
+  await win.fill('#server', DEFAULT_SERVER);
+  await win.click('#save');
+  await win.waitForFunction(() => localStorage.getItem('chrome.sync.server') === null);
+  check('saving the default leaves the setting unset', (await stored()).server === null);
+  await win.click('.topbar a');
+  await win.waitForURL('app://reader/home.html');
+  check('Settings has a way back home', win.url() === 'app://reader/home.html');
 
   check('no page errors', errors.length === 0, errors.join('; '));
 } catch (e) {
