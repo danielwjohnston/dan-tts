@@ -14,10 +14,14 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
+import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 from urllib.parse import quote, urljoin, urlparse
+from xml.sax.saxutils import escape, unescape
 
 import aiohttp
 import edge_tts
@@ -50,8 +54,22 @@ ELEVEN_ID_RE = re.compile(r"^eleven:[A-Za-z0-9_-]{8,64}\Z")  # \Z: "$" would acc
 ELEVEN_MAX_CHARS = 5000  # per request; the tester splits long text into paragraphs anyway
 ELEVEN_API = "https://api.elevenlabs.io"
 
+# Azure AI Speech as a third voice provider (same rules as worker/src/azure.js). Voice ids are
+# "azure:<ShortName>" (azure:en-US-JennyNeural). The service speaks the same WebSocket protocol as
+# Edge's Read Aloud, so a small client of our own talks to it below (the edge_tts package is tied to
+# Edge's endpoint and token). The key and the region live on the server only.
+AZURE_SPEECH_KEY = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+AZURE_SPEECH_REGION = os.environ.get("AZURE_SPEECH_REGION", "").strip().lower()
+AZURE_PREFIX = "azure:"
+# Short names like en-US-JennyNeural; HD voices ("en-US-Ava:DragonHDLatestNeural") are left out, as on the Worker
+AZURE_ID_RE = re.compile(r"^azure:[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z0-9]+\Z")
+AZURE_REGION_RE = re.compile(r"^[a-z0-9]{2,32}\Z")  # region identifiers such as eastus or westeurope
+AZURE_NOT_CONFIGURED = "Azure voices are not configured on this server (set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION)"
+AZURE_USAGE_NOTE = "Azure reports usage in its portal; the free tier is 500,000 characters a month"
+
 _voice_cache: Optional[List[Dict]] = None
 _eleven_voice_cache: Optional[List[Dict]] = None
+_azure_voice_cache: Optional[List[Dict]] = None
 
 app = FastAPI(title="Dan's TTS Project", version="0.1.0")
 app.add_middleware(
@@ -77,7 +95,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 class SynthesisRequest(BaseModel):
     text: str = Field(..., max_length=MAX_TEXT_CHARS, description="Plain text or SSML to synthesize")
-    voice: str = Field(DEFAULT_VOICE, description="Microsoft Edge voice name")
+    voice: str = Field(DEFAULT_VOICE, description="Voice id: an Edge name, eleven:<voice_id> or azure:<name>")
     format: SUPPORTED_FORMATS = Field(
         "mp3", description="Output format: mp3 (direct), m4a, ogg, or flac"
     )
@@ -88,11 +106,15 @@ class ExtractTextRequest(BaseModel):
 
 
 def _valid_voice(voice: str) -> bool:
-    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice))
+    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice) or AZURE_ID_RE.match(voice))
+
+
+def _azure_configured() -> bool:
+    return bool(AZURE_SPEECH_KEY and AZURE_SPEECH_REGION)
 
 
 def _providers() -> list[str]:
-    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else [])
+    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else []) + (["azure"] if _azure_configured() else [])
 
 
 def _eleven_error(status: int, body: str) -> HTTPException:
@@ -256,9 +278,12 @@ async def _eleven_usage() -> dict:
 
 async def _usage() -> dict:
     """What each provider costs right now. A failed ElevenLabs lookup is reported, not raised, and kept
-    15 s; a good answer a minute. Concurrent misses share one upstream call."""
+    15 s; a good answer a minute. Concurrent misses share one upstream call. Azure has no usage
+    endpoint, so its entry is a note."""
     global _eleven_usage_cache, _eleven_usage_lock
     out: dict = {"edge": {"unlimited": True}}
+    if _azure_configured():
+        out["azure"] = {"tracked": False, "note": AZURE_USAGE_NOTE}
     if not ELEVENLABS_API_KEY:
         return out
     loop = asyncio.get_running_loop()
@@ -303,9 +328,178 @@ async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
     return audio, _alignment_to_boundaries(alignment if isinstance(alignment, dict) else {})
 
 
+# ---- Azure AI Speech ----
+
+def _azure_host() -> str:
+    region = AZURE_SPEECH_REGION.strip().lower()
+    if not AZURE_REGION_RE.match(region):
+        raise HTTPException(status_code=503, detail="AZURE_SPEECH_REGION is not a region identifier (for example eastus)")
+    return f"{region}.tts.speech.microsoft.com"
+
+
+def _azure_headers() -> dict:
+    """The header that carries the key, on the socket handshake and the voice list alike."""
+    return {"Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY}
+
+
+def _azure_refused(status: int) -> HTTPException:
+    """A refused response (socket handshake or voice list) in plain words, the same as the Worker."""
+    if status in (401, 403):
+        return HTTPException(status_code=502, detail="Azure rejected the key or region: check AZURE_SPEECH_KEY and AZURE_SPEECH_REGION on the server")
+    if status == 429:
+        return HTTPException(status_code=429, detail="Azure is rate-limiting requests; try again in a moment")
+    return HTTPException(status_code=502, detail=f"Azure error: HTTP {status}")
+
+
+async def _azure_voice_list() -> list:
+    """The region's raw voice list (GET with the key header). Listing costs nothing."""
+    url = f"https://{_azure_host()}/cognitiveservices/voices/list"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20), headers=_azure_headers()) as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    raise _azure_refused(resp.status)
+                try:
+                    data = await resp.json(content_type=None)
+                except (ValueError, aiohttp.ContentTypeError):
+                    data = None
+    except aiohttp.ClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Azure error: {exc}")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="Azure timed out")
+    if not isinstance(data, list):
+        raise HTTPException(status_code=502, detail="Azure returned an unreadable voice list")
+    return data
+
+
+def _azure_friendly(short_name: str) -> str:
+    """"en-US-JennyMultilingualNeural" → "Jenny Multilingual", when the listing has no DisplayName."""
+    name = re.sub(r"Neural$", "", "-".join(short_name.split("-")[2:]))
+    return re.sub(r"Multilingual$", " Multilingual", name)
+
+
+def _azure_lists(v) -> bool:
+    """English, not deprecated, and a plain short name (the same voices the Worker lists)."""
+    return (isinstance(v, dict) and str(v.get("Locale") or "").lower().startswith("en-")
+            and v.get("Status") != "Deprecated" and bool(AZURE_ID_RE.match(f"{AZURE_PREFIX}{v.get('ShortName')}")))
+
+
+async def _azure_voices() -> list[dict]:
+    """The region's English voices in the Edge entries' shape, en-US first."""
+    voices = [
+        {
+            "name": v.get("DisplayName") or _azure_friendly(v["ShortName"]),
+            "shortName": f"{AZURE_PREFIX}{v['ShortName']}",
+            "locale": v.get("Locale"),
+            "localeName": v.get("LocaleName") or "",
+            "gender": v.get("Gender") or "",
+            "styleList": v.get("StyleList") if isinstance(v.get("StyleList"), list) else [],
+            "provider": "azure",
+        }
+        for v in await _azure_voice_list() if _azure_lists(v)
+    ]
+    return sorted(voices, key=lambda v: v["locale"] != "en-US")
+
+
+_AZURE_CONTROL_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f]")  # the service rejects them (same as the engine)
+
+
+def _azure_ssml(text: str, voice: str) -> str:
+    """The same SSML the shared engine sends: one voice, neutral prosody, the text escaped."""
+    body = escape(_AZURE_CONTROL_CHARS.sub(" ", text), {'"': "&quot;", "'": "&apos;"})
+    return ("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>"
+            f"<voice name='{voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>{body}</prosody></voice></speak>")
+
+
+def _azure_messages(ssml: str) -> tuple[str, str]:
+    """The two text frames that start a turn: speech.config (MP3 out, word boundaries on) and the SSML."""
+    stamp = time.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)", time.gmtime())
+    config = (f"X-Timestamp:{stamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
+              '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},'
+              '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n')
+    request = f"X-RequestId:{uuid.uuid4().hex}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{stamp}Z\r\nPath:ssml\r\n\r\n{ssml}"
+    return config, request
+
+
+def _ws_headers(head: str) -> dict:
+    return {k: v for k, _, v in (line.partition(":") for line in head.split("\r\n")) if k}
+
+
+def _ws_text_frame(text: str) -> tuple[dict, str]:
+    """A text frame: "Header:value" lines, a blank line, the body."""
+    head, _, body = text.partition("\r\n\r\n")
+    return _ws_headers(head), body
+
+
+def _ws_binary_frame(data: bytes) -> tuple[dict, bytes]:
+    """A binary frame: a 2-byte big-endian header length, the headers, then the audio."""
+    if len(data) < 2:
+        return {}, b""
+    n = int.from_bytes(data[:2], "big")
+    return _ws_headers(bytes(data[2:2 + n]).decode("utf-8", errors="replace")), bytes(data[2 + n:])
+
+
+@asynccontextmanager
+async def _azure_open_socket(url: str):
+    """The WebSocket to Azure, its own function so tests can put a scripted fake in its place."""
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60), headers=_azure_headers()) as session:
+        async with session.ws_connect(url, timeout=aiohttp.ClientWSTimeout(ws_receive=60, ws_close=10)) as ws:
+            yield ws
+
+
+async def _azure_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
+    """Text in, MP3 and word boundaries (100 ns ticks) out, through Azure's socket."""
+    if not AZURE_ID_RE.match(voice):
+        raise HTTPException(status_code=400, detail="Invalid voice name")
+    if not _azure_configured():
+        raise HTTPException(status_code=503, detail=AZURE_NOT_CONFIGURED)
+    # Azure wants a connection id (a GUID without dashes) and no Edge token
+    url = f"wss://{_azure_host()}/cognitiveservices/websocket/v1?X-ConnectionId={uuid.uuid4().hex}"
+    config, request = _azure_messages(_azure_ssml(text, voice[len(AZURE_PREFIX):]))
+    audio = bytearray()
+    boundaries: list[dict] = []
+    try:
+        async with _azure_open_socket(url) as ws:
+            await ws.send_str(config)
+            await ws.send_str(request)
+            async for msg in ws:
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    headers, body = _ws_text_frame(msg.data)
+                    path = headers.get("Path")
+                    if path == "audio.metadata":
+                        for m in json.loads(body).get("Metadata") or []:
+                            data = m.get("Data") or {}
+                            # Punctuation marks are reported the same way; they are not words to highlight
+                            if m.get("Type") == "WordBoundary" and (data.get("text") or {}).get("BoundaryType") != "PunctuationBoundary":
+                                boundaries.append({"offset": data["Offset"], "duration": data["Duration"],
+                                                   "text": unescape(data["text"]["Text"], {"&quot;": '"', "&apos;": "'"})})
+                    elif path == "turn.end":
+                        break
+                elif msg.type == aiohttp.WSMsgType.BINARY:
+                    headers, data = _ws_binary_frame(msg.data)
+                    if headers.get("Path") == "audio" and data:
+                        audio.extend(data)
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    raise HTTPException(status_code=502, detail=f"Azure error: {msg.data or 'connection failed'}")
+    except aiohttp.WSServerHandshakeError as exc:
+        raise _azure_refused(exc.status)
+    except aiohttp.ClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Azure error: {exc}")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="Azure timed out")
+    except (ValueError, KeyError, TypeError) as exc:  # a frame we cannot read
+        raise HTTPException(status_code=502, detail=f"Azure returned an unreadable response ({type(exc).__name__})")
+    if not audio:
+        raise HTTPException(status_code=502, detail="Azure error: No audio received")
+    return bytes(audio), boundaries
+
+
 async def synthesize_mp3(text: str, voice: str) -> bytes:
     if voice.startswith(ELEVEN_PREFIX):
         audio, _ = await _eleven_synthesize(text, voice)
+        return audio
+    if voice.startswith(AZURE_PREFIX):
+        audio, _ = await _azure_synthesize(text, voice)
         return audio
     communicator = edge_tts.Communicate(text, voice=voice)
     audio_chunks = []
@@ -320,6 +514,8 @@ async def synthesize_mp3(text: str, voice: str) -> bytes:
 async def synthesize_with_boundaries(text: str, voice: str):
     if voice.startswith(ELEVEN_PREFIX):
         return await _eleven_synthesize(text, voice)
+    if voice.startswith(AZURE_PREFIX):
+        return await _azure_synthesize(text, voice)
     communicator = edge_tts.Communicate(text, voice=voice, boundary="WordBoundary")
     audio_chunks = []
     boundaries = []
@@ -388,7 +584,24 @@ async def list_voices() -> list[dict]:
             for v in voices
             if v.get("Locale") == "en-US"
         ]
-    return _voice_cache + await _eleven_voices_cached()
+    return _voice_cache + await _eleven_voices_cached() + await _azure_voices_cached()
+
+
+async def _azure_voices_cached() -> list[dict]:
+    """Azure voices when the key and region are set. A failed listing is not cached and does not hide the other voices."""
+    global _azure_voice_cache
+    if not _azure_configured():
+        return []
+    if _azure_voice_cache is None:
+        try:
+            _azure_voice_cache = await _azure_voices()
+        except HTTPException as exc:
+            print(f"Azure voice list unavailable: {exc.detail}")
+            return []
+        except Exception as exc:  # a malformed listing must not take the other voices down with it
+            print(f"Azure voice list unavailable: {exc!r}")
+            return []
+    return _azure_voice_cache
 
 
 async def _eleven_voices_cached() -> list[dict]:
@@ -443,10 +656,11 @@ async def pre_render_samples():
 
 @app.get("/voices")
 async def voices(refresh: bool = False):
-    global _voice_cache, _eleven_voice_cache
+    global _voice_cache, _eleven_voice_cache, _azure_voice_cache
     if refresh:
         _voice_cache = None
         _eleven_voice_cache = None
+        _azure_voice_cache = None
     voices = await list_voices()
     for v in voices:
         v["sampleUrl"] = f"/samples/{v['shortName']}"
@@ -506,10 +720,14 @@ async def synthesize_with_timing(payload: SynthesisRequest):
 
 async def ensure_sample(voice: str) -> Path:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-    sample_path = SAMPLES_DIR / (f"eleven-{voice[len(ELEVEN_PREFIX):]}.mp3" if voice.startswith(ELEVEN_PREFIX) else f"{voice}.mp3")
+    # A provider id keeps its prefix as a word, not a colon, so the file name works on every file system
+    sample_path = SAMPLES_DIR / (voice.replace(":", "-", 1) + ".mp3")
     if sample_path.exists():
         return sample_path
-    if voice.startswith(ELEVEN_PREFIX):
+    if voice.startswith(AZURE_PREFIX):
+        # Synthesized like an Edge sample: a few dozen characters of quota, once per voice
+        audio, _ = await _azure_synthesize(SAMPLE_TEXT, voice)
+    elif voice.startswith(ELEVEN_PREFIX):
         # The provider's own preview clip, so a sample costs no credits
         if not ELEVENLABS_API_KEY:
             raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")

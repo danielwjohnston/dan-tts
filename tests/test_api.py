@@ -1,8 +1,12 @@
 """API tests. Edge TTS and outbound HTTP are stubbed so these run offline."""
 import asyncio
+import json
+import re
 import socket
 import time
+from contextlib import asynccontextmanager
 
+import aiohttp
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -549,3 +553,296 @@ def test_usage_reports_a_failed_lookup_without_failing(client, monkeypatch):
     expires_at, cached = main._eleven_usage_cache
     assert cached == r.json()["elevenlabs"]
     assert 0 < expires_at - time.monotonic() <= main.USAGE_TTL_ERROR  # loop.time() is the monotonic clock
+
+
+# ---- Azure AI Speech provider (same rules and status codes as worker/src/azure.js) ----
+
+AZURE_VOICE = "azure:en-US-JennyNeural"
+AZURE_LISTING = [
+    {"Name": "Microsoft Server Speech Text to Speech Voice (en-GB, SoniaNeural)", "DisplayName": "Sonia", "ShortName": "en-GB-SoniaNeural", "Gender": "Female", "Locale": "en-GB", "LocaleName": "English (United Kingdom)", "StyleList": ["cheerful"], "VoiceType": "Neural", "Status": "GA"},
+    {"Name": "Microsoft Server Speech Text to Speech Voice (en-US, JennyNeural)", "DisplayName": "Jenny", "ShortName": "en-US-JennyNeural", "Gender": "Female", "Locale": "en-US", "LocaleName": "English (United States)", "StyleList": ["chat", "newscast"], "VoiceType": "Neural", "Status": "GA"},
+    {"Name": "HD", "DisplayName": "Ava Dragon HD Latest", "ShortName": "en-US-Ava:DragonHDLatestNeural", "Gender": "Female", "Locale": "en-US", "LocaleName": "English (United States)", "VoiceType": "NeuralHD", "Status": "Preview"},
+    {"Name": "Katja", "DisplayName": "Katja", "ShortName": "de-DE-KatjaNeural", "Gender": "Female", "Locale": "de-DE", "LocaleName": "German (Germany)", "VoiceType": "Neural", "Status": "GA"},
+    {"Name": "Guy", "ShortName": "en-US-GuyNeural", "Gender": "Male", "Locale": "en-US", "LocaleName": "English (United States)", "VoiceType": "Neural", "Status": "Deprecated"},
+    {"Name": "Ryan", "ShortName": "en-US-RyanMultilingualNeural", "Gender": "Male", "Locale": "en-US", "LocaleName": "English (United States)", "VoiceType": "Neural", "Status": "GA"},
+    None, "odd",
+]
+
+
+def _azure_on(monkeypatch, key="secret", region="eastus"):
+    monkeypatch.setattr(main, "AZURE_SPEECH_KEY", key)
+    monkeypatch.setattr(main, "AZURE_SPEECH_REGION", region)
+    monkeypatch.setattr(main, "_azure_voice_cache", None)
+
+
+def _binary_frame(path: str, payload: bytes) -> bytes:
+    head = f"X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nPath:{path}\r\n".encode()
+    return len(head).to_bytes(2, "big") + head + payload
+
+
+def _text_frame(path: str, body: str) -> str:
+    return f"X-RequestId:abc\r\nContent-Type:application/json\r\nPath:{path}\r\n\r\n{body}"
+
+
+def _meta(text: str, offset: int, duration: int, boundary_type="WordBoundary") -> str:
+    return _text_frame("audio.metadata", json.dumps({"Metadata": [{"Type": "WordBoundary", "Data": {"Offset": offset, "Duration": duration, "text": {"Text": text, "Length": len(text), "BoundaryType": boundary_type}}}]}))
+
+
+class FakeSocket:
+    """Plays a script of frames back once both opening messages have been sent, as the service would."""
+
+    def __init__(self, script):
+        self.script, self.sent = list(script), []
+
+    async def send_str(self, data):
+        self.sent.append(data)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if len(self.sent) < 2 or not self.script:
+            raise StopAsyncIteration
+        frame = self.script.pop(0)
+        if isinstance(frame, aiohttp.WSMessage):
+            return frame
+        return aiohttp.WSMessage(aiohttp.WSMsgType.TEXT if isinstance(frame, str) else aiohttp.WSMsgType.BINARY, frame, None)
+
+
+def _fake_socket(monkeypatch, script=(), fail=None):
+    """Replace the socket with a scripted one; `fail` is raised on connect instead (a refused handshake, say)."""
+    seen = {}
+
+    @asynccontextmanager
+    async def open_socket(url):
+        seen["url"] = url
+        if fail is not None:
+            raise fail
+        seen["socket"] = FakeSocket(script)
+        yield seen["socket"]
+
+    monkeypatch.setattr(main, "_azure_open_socket", open_socket)
+    return seen
+
+
+def test_azure_ids_and_configuration(monkeypatch):
+    assert main.AZURE_ID_RE.match("azure:en-US-JennyNeural")
+    assert main.AZURE_ID_RE.match("azure:en-GB-SoniaNeural")
+    for bad in ("azure:", "azure:en-US-Ava:DragonHDLatestNeural", "azure:../x", "en-US-AriaNeural", "eleven:21m00Tcm4TlvDq8ikWAM", "azure:en-US-JennyNeural\n"):
+        assert not main.AZURE_ID_RE.match(bad), bad
+    assert main._valid_voice("azure:en-US-JennyNeural") and not main._valid_voice("azure:bad")
+    assert not main._azure_configured()
+    monkeypatch.setattr(main, "AZURE_SPEECH_KEY", "k")
+    assert not main._azure_configured() and main._providers() == ["edge"]
+    monkeypatch.setattr(main, "AZURE_SPEECH_REGION", "eastus")
+    assert main._azure_configured() and main._providers() == ["edge", "azure"]
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "k")
+    assert main._providers() == ["edge", "elevenlabs", "azure"]
+
+
+@pytest.mark.parametrize("status, expected_status, words", [
+    (401, 502, "rejected the key or region: check AZURE_SPEECH_KEY and AZURE_SPEECH_REGION"),
+    (403, 502, "rejected the key or region"),
+    (429, 429, "rate-limiting"),
+    (500, 502, "HTTP 500"),
+])
+def test_azure_errors_are_plain_language(status, expected_status, words):
+    exc = main._azure_refused(status)
+    assert exc.status_code == expected_status
+    assert words in exc.detail
+
+
+def test_ws_frames_parse_like_the_engine():
+    assert main._ws_text_frame("X-RequestId:abc\r\nPath:turn.end\r\n\r\n{}") == ({"X-RequestId": "abc", "Path": "turn.end"}, "{}")
+    headers, audio = main._ws_binary_frame(_binary_frame("audio", b"\x01\x02"))
+    assert headers["Path"] == "audio" and headers["Content-Type"] == "audio/mpeg" and audio == b"\x01\x02"
+    assert main._ws_binary_frame(b"\x00") == ({}, b"")
+
+
+def test_azure_synthesize_speaks_the_edge_protocol_with_a_key(monkeypatch):
+    _azure_on(monkeypatch)
+    script = [_text_frame("turn.start", "{}"), _meta("Hello", 1_000_000, 4_000_000), _binary_frame("audio", b"\x01\x02\x03"),
+              _meta(",", 5_000_000, 500_000, "PunctuationBoundary"), _meta("&amp;world", 5_500_000, 4_000_000), _binary_frame("audio", b"\x04"),
+              _text_frame("turn.end", "{}"), _binary_frame("audio", b"never read")]
+    seen = _fake_socket(monkeypatch, script)
+    audio, boundaries = asyncio.run(main._azure_synthesize("Hello, & \"world\"\x0b", AZURE_VOICE))
+    assert audio == b"\x01\x02\x03\x04"
+    assert boundaries == [{"offset": 1_000_000, "duration": 4_000_000, "text": "Hello"}, {"offset": 5_500_000, "duration": 4_000_000, "text": "&world"}]
+    assert re.fullmatch(r"wss://eastus\.tts\.speech\.microsoft\.com/cognitiveservices/websocket/v1\?X-ConnectionId=[0-9a-f]{32}", seen["url"])
+    config, ssml = seen["socket"].sent
+    assert "Path:speech.config" in config and '"wordBoundaryEnabled":"true"' in config and "audio-24khz-48kbitrate-mono-mp3" in config
+    assert "Path:ssml" in ssml and "Content-Type:application/ssml+xml" in ssml
+    assert "<voice name='en-US-JennyNeural'>" in ssml  # the prefix is ours, not Azure's
+    assert "Hello, &amp; &quot;world&quot; </prosody>" in ssml  # escaped, control character replaced
+
+
+def test_azure_synthesize_validates_before_network(monkeypatch):
+    seen = _fake_socket(monkeypatch, fail=AssertionError("no network call expected"))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._azure_synthesize("hi", "azure:bad"))
+    assert e.value.status_code == 400  # id first, then the secrets, same as the Worker
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._azure_synthesize("hi", AZURE_VOICE))
+    assert e.value.status_code == 503 and "AZURE_SPEECH_KEY and AZURE_SPEECH_REGION" in e.value.detail
+    monkeypatch.setattr(main, "AZURE_SPEECH_KEY", "k")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._azure_synthesize("hi", AZURE_VOICE))
+    assert e.value.status_code == 503
+    _azure_on(monkeypatch, region="east us")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._azure_synthesize("hi", AZURE_VOICE))
+    assert e.value.status_code == 503 and "region identifier" in e.value.detail
+    assert "url" not in seen
+
+
+def test_azure_synthesize_maps_failures_like_the_worker(monkeypatch):
+    _azure_on(monkeypatch)
+
+    def run():
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(main._azure_synthesize("hi", AZURE_VOICE))
+        return e.value
+
+    _fake_socket(monkeypatch, fail=aiohttp.WSServerHandshakeError(None, (), status=401, message="Unauthorized"))
+    exc = run()
+    assert exc.status_code == 502 and "rejected the key or region" in exc.detail
+    _fake_socket(monkeypatch, fail=aiohttp.WSServerHandshakeError(None, (), status=429, message="Too Many Requests"))
+    assert run().status_code == 429
+    _fake_socket(monkeypatch, fail=aiohttp.ClientConnectionError("connection reset"))
+    exc = run()
+    assert exc.status_code == 502 and "connection reset" in exc.detail
+    _fake_socket(monkeypatch, fail=asyncio.TimeoutError())
+    exc = run()
+    assert exc.status_code == 504 and "timed out" in exc.detail
+    _fake_socket(monkeypatch, [_text_frame("turn.end", "{}")])
+    exc = run()
+    assert exc.status_code == 502 and "No audio" in exc.detail
+    _fake_socket(monkeypatch, [aiohttp.WSMessage(aiohttp.WSMsgType.ERROR, RuntimeError("boom"), None)])
+    exc = run()
+    assert exc.status_code == 502 and "boom" in exc.detail
+    _fake_socket(monkeypatch, [_text_frame("audio.metadata", "not json")])
+    exc = run()
+    assert exc.status_code == 502 and "unreadable" in exc.detail
+
+
+def test_azure_voices_route_by_prefix(monkeypatch):
+    calls = []
+
+    async def fake_azure(text, voice):
+        calls.append(voice)
+        return b"ID3azure", [{"offset": 0, "duration": 1, "text": "hi"}]
+
+    monkeypatch.setattr(main, "_azure_synthesize", fake_azure)
+    assert asyncio.run(main.synthesize_mp3("hi", AZURE_VOICE)) == b"ID3azure"
+    assert asyncio.run(main.synthesize_with_boundaries("hi", AZURE_VOICE))[0] == b"ID3azure"
+    assert calls == [AZURE_VOICE, AZURE_VOICE]
+
+
+def test_health_lists_azure_when_both_secrets_are_set(client, monkeypatch):
+    monkeypatch.setattr(main, "AZURE_SPEECH_KEY", "secret")
+    assert client.get("/health").json() == {"status": "ok", "providers": ["edge"]}
+    monkeypatch.setattr(main, "AZURE_SPEECH_REGION", "eastus")
+    assert client.get("/health").json() == {"status": "ok", "providers": ["edge", "azure"]}
+
+
+def test_azure_voice_listing_keeps_english_plain_voices_en_us_first(monkeypatch):
+    _azure_on(monkeypatch)
+
+    async def fake_list():
+        return AZURE_LISTING
+
+    monkeypatch.setattr(main, "_azure_voice_list", fake_list)
+    voices = asyncio.run(main._azure_voices())
+    assert [v["shortName"] for v in voices] == ["azure:en-US-JennyNeural", "azure:en-US-RyanMultilingualNeural", "azure:en-GB-SoniaNeural"]
+    assert voices[0] == {"name": "Jenny", "shortName": "azure:en-US-JennyNeural", "locale": "en-US", "localeName": "English (United States)",
+                         "gender": "Female", "styleList": ["chat", "newscast"], "provider": "azure"}
+    assert voices[1]["name"] == "Ryan Multilingual" and voices[1]["styleList"] == []
+
+
+def test_azure_voice_list_rejects_bad_region_before_network(monkeypatch):
+    _azure_on(monkeypatch, region="eastus/../evil")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._azure_voice_list())
+    assert e.value.status_code == 503
+
+
+def test_voices_merge_azure_and_survive_its_failure(monkeypatch):
+    async def fake_edge_list():
+        return [{"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US"}]
+
+    attempts = []
+    azure = {"up": False}
+
+    async def fake_azure_voices():
+        attempts.append(1)
+        if not azure["up"]:
+            raise HTTPException(status_code=502, detail="Azure rejected the key or region")
+        return [{"name": "Jenny", "shortName": AZURE_VOICE, "provider": "azure"}]
+
+    async def fake_eleven_voices():
+        return [{"name": "Adam", "shortName": "eleven:aaaaaaaaaaaa", "provider": "elevenlabs"}]
+
+    async def no_samples():  # startup's background pre-render would list voices again at an unpredictable moment
+        pass
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_azure_voices", fake_azure_voices)
+    monkeypatch.setattr(main, "_eleven_voices", fake_eleven_voices)
+    monkeypatch.setattr(main, "pre_render_samples", no_samples)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    _azure_on(monkeypatch)
+    with TestClient(main.app) as c:
+        # Startup warmed the list once (a failure); the next request fails too, serves the other voices, and is not cached
+        assert len(attempts) == 1
+        assert [v["shortName"] for v in c.get("/voices").json()] == ["en-US-AriaNeural", "eleven:aaaaaaaaaaaa"]
+        assert len(attempts) == 2
+        azure["up"] = True
+        voices = c.get("/voices").json()
+        assert [(v["shortName"], v["provider"], v["sampleUrl"]) for v in voices] == [
+            ("en-US-AriaNeural", "edge", "/samples/en-US-AriaNeural"),
+            ("eleven:aaaaaaaaaaaa", "elevenlabs", "/samples/eleven:aaaaaaaaaaaa"),
+            (AZURE_VOICE, "azure", f"/samples/{AZURE_VOICE}"),
+        ]
+        c.get("/voices")
+        assert len(attempts) == 3  # a good answer is cached
+        c.get("/voices?refresh=1")
+        assert len(attempts) == 4  # refresh clears it
+
+
+def test_azure_sample_is_synthesized_once_and_cached(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
+    assert client.get(f"/samples/{AZURE_VOICE}").status_code == 503  # not configured, before any network use
+    assert client.get("/samples/azure:bad").status_code == 400
+    _azure_on(monkeypatch)
+    calls = []
+
+    async def fake_azure(text, voice):
+        calls.append((text, voice))
+        return b"ID3azure", []
+
+    monkeypatch.setattr(main, "_azure_synthesize", fake_azure)
+    r = client.get(f"/samples/{AZURE_VOICE}")
+    assert r.status_code == 200 and r.content == b"ID3azure"
+    assert (tmp_path / "azure-en-US-JennyNeural.mp3").exists()
+    assert calls == [(main.SAMPLE_TEXT, AZURE_VOICE)]
+    assert client.get(f"/samples/{AZURE_VOICE}").content == b"ID3azure"
+    assert len(calls) == 1
+
+
+def test_azure_sample_errors_keep_their_status(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
+    _azure_on(monkeypatch)
+    _fake_socket(monkeypatch, fail=aiohttp.WSServerHandshakeError(None, (), status=401, message="Unauthorized"))
+    r = client.get(f"/samples/{AZURE_VOICE}")
+    assert r.status_code == 502 and "rejected the key or region" in r.json()["detail"]
+
+
+def test_usage_carries_the_azure_note_when_configured(client, monkeypatch):
+    assert client.get("/usage").json() == {"edge": {"unlimited": True}}
+    _azure_on(monkeypatch)
+    assert client.get("/usage").json() == {
+        "edge": {"unlimited": True},
+        "azure": {"tracked": False, "note": "Azure reports usage in its portal; the free tier is 500,000 characters a month"},
+    }
