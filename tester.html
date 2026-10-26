@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="static/themes.css" />
   <script src="static/theme.js"></script>
   <script src="static/chunk-text.js"></script>
+  <script src="static/markup.js"></script>
   <script src="static/bundle.js"></script>
   <style>
     :root {
@@ -149,6 +150,9 @@
         <textarea id="text">Hello world from Dan's TTS Project.</textarea>
         <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs voices get real pauses.">
+        <input type="checkbox" id="markup" style="width:auto;margin:0;"> Markup tokens <span style="opacity:.8">([pause 800ms], word[say: respelling], [spell: ABC])</span>
+      </label>
       <div class="text-meta">
         <span id="text-count">6 words &middot; 35 chars</span>
         <span>Ctrl+Enter to synthesize</span>
@@ -765,11 +769,17 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return { blob: b64toBlob(data.audio, data.contentType), boundaries: data.boundaries || [], outFormat: format, chunks };
     }
 
+    // Markup tokens: lowered to what the chosen voice's provider understands (static/markup.js)
+    const markupBox = document.getElementById('markup');
+    try { markupBox.checked = localStorage.getItem('dan.markup') === '1'; } catch (e) {}
+    markupBox.addEventListener('change', () => { try { localStorage.setItem('dan.markup', markupBox.checked ? '1' : '0'); } catch (e) {} });
+    const textToSpeak = (raw, voice) => (markupBox.checked && window.danMarkup ? danMarkup.lower(raw, voice) : raw);
+
     btn.onclick = async () => {
       if (isSynthesizing) return;
-      const text = textArea.value;
-      if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const voice = voiceSelect.value || 'en-US-AriaNeural';
+      const text = textToSpeak(textArea.value, voice);
+      if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const format = document.getElementById('format').value;
       setLoading(true);
       logEl.textContent = 'Requesting...';

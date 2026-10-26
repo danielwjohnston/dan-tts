@@ -20,7 +20,7 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
-      - run: node --test tests/chunk-text.test.js tests/bundle.test.js
+      - run: node --test tests/chunk-text.test.js tests/bundle.test.js tests/markup.test.js
       - run: npm test
         working-directory: engine
       - run: node --test extension/test/align.test.js extension/test/pdf-text.test.js

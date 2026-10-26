@@ -1,6 +1,6 @@
 # Spec: SSML editor
 
-Status: Draft
+Status: Phase 1 built (2026-10-26): `static/markup.js` and the tester's "Markup tokens" switch; see §11.
 Roadmap item: Medium-Term, "SSML support"
 
 ## 1. Summary
@@ -173,3 +173,25 @@ Each phase is a separate PR, following the pattern of recent merged PRs.
 - An SSML body containing `<script>` or any element outside the subset is rejected by the server.
 - A user can produce all six constructs in §5.2 from the tester without typing a tag.
 - The extension and tester produce the same SSML for the same markup.
+
+## 11. What phase 1 shipped, and how it differs from the draft
+
+Edge's endpoint rejects SSML inside the text (the engine's envelope is the only markup it accepts), and
+ElevenLabs takes plain text plus `<break>` tags. So phase 1 does not send SSML at all. Instead, the
+tokens are **lowered to what each provider understands**, in one shared module, `static/markup.js`:
+
+| Token | Written text (display, captions) | Edge | ElevenLabs |
+|---|---|---|---|
+| `[pause]`, `[pause 800ms]`, `[pause 1.5s]` (100 ms–5 s) | nothing | a comma (< 600 ms), a full stop (< 1.2 s) or a paragraph break, fitted to the punctuation already there | `<break time="0.8s" />`, 3 s at most |
+| `word[say: respelling]` | `word` | `respelling` | `respelling` |
+| `[spell: ABC]` | `ABC` | `A B C` | `A B C` |
+
+Anything else in square brackets (`[1]`, `[citation needed]`) is left alone. `lower(text, voiceOrProvider)`
+gives the text to send, `strip(text)` the written text, `parse(text)` the segments, `hasMarkup(text)` a
+quick check. Unit tests: `tests/markup.test.js`.
+
+The tester's **Markup tokens** switch (next to the text box) lowers the text for the selected voice before
+synthesis, preview and export. Highlighting and captions show the spoken words, as §6.5 says.
+
+Not yet: emphasis, rate, pitch and volume spans (Edge cannot take them per span; ElevenLabs has no tag for
+them), the insert toolbar (§5.5), saved markup in the library (§5.6) and the extension (§9 phase 3).

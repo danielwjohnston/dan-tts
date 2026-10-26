@@ -60,6 +60,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** `tokensToSsml` and the per-provider lowering have unit tests; the tester has the Markup toggle and preview; highlighting survives a pause.
 
+**Status (2026-10-26):** phase 1 built. `static/markup.js` parses `[pause]`, `[pause 800ms]`, `word[say: respelling]` and `[spell: ABC]`, leaves other brackets alone, and lowers per provider: Edge gets punctuation for pauses (comma, full stop, paragraph break) and plain respellings; ElevenLabs gets `<break time>` tags (3 s cap) and the same respellings; `strip()` gives the written text. The tester has a "Markup tokens" switch that lowers the text for the chosen voice before synthesis. Listening checks with real voices, the toolbar (phase 2) and the extension (phase 3) remain.
+
 ### C. Server voices in the extension and desktop app
 
 **Question:** will people accept a server hop (and a quota) for a better voice while reading pages?
