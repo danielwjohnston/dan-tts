@@ -262,7 +262,14 @@
     let allVoices = [];
     let lastBlob = null;
     let lastExt = 'mp3';
-    let lastText = '';
+    let lastText = '';       // what was sent to the voice (markup lowered)
+    let lastWritten = '';    // what was typed, tokens removed: shown, exported and used in file names
+    // Markup tokens: lowered to what the chosen voice's provider understands (static/markup.js)
+    const markupBox = document.getElementById('markup');
+    try { markupBox.checked = localStorage.getItem('dan.markup') === '1'; } catch (e) {}
+    markupBox.addEventListener('change', () => { try { localStorage.setItem('dan.markup', markupBox.checked ? '1' : '0'); } catch (e) {} });
+    const textToSpeak = (raw, voice) => (markupBox.checked && window.danMarkup ? danMarkup.lower(raw, voice) : raw);
+    const writtenText = (raw) => (markupBox.checked && window.danMarkup ? danMarkup.strip(raw) : raw);
     let lastVoice = '';
     let isSynthesizing = false;
     let selectedVoiceName = '';
@@ -308,8 +315,8 @@
           batchLog.textContent = `Item ${i + 1} of ${items.length}...`;
           setProgress(i / items.length);
           try {
-            const { blob, boundaries, outFormat } = await synthesizeText(items[i], voice, format);
-            const base = `${String(i + 1).padStart(2, '0')}-${smartFilename(items[i], voice, '').replace(/\.$/, '')}`;
+            const { blob, boundaries, outFormat } = await synthesizeText(textToSpeak(items[i], voice), voice, format, { separateParagraphs: markupBox.checked });
+            const base = `${String(i + 1).padStart(2, '0')}-${smartFilename(writtenText(items[i]), voice, '').replace(/\.$/, '')}`;
             files.push({ name: `${base}.${outFormat}`, data: new Uint8Array(await blob.arrayBuffer()) });
             if (boundaries.length) files.push({ name: `${base}.srt`, data: ttsBundle.boundariesToSrt(boundaries) });
           } catch (err) {
@@ -348,7 +355,7 @@
       const boundaries = wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text }));
       const last = boundaries[boundaries.length - 1];
       return {
-        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg', boundaries,
+        text: lastWritten, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg', boundaries,
         metadata: { words: boundaries.length, duration_ms: last ? Math.floor((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString().replace(/\.\d+Z$/, 'Z') },
       };
     }
@@ -378,7 +385,7 @@
       const playerJs = await (await fetch('static/tts-player.js')).text();
       const last = wordBoundaries[wordBoundaries.length - 1];
       const data = {
-        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg',
+        text: lastWritten, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg',
         boundaries: wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text })),
         metadata: { words: wordBoundaries.length, duration_ms: last ? Math.round((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString() },
       };
@@ -387,7 +394,7 @@
       // switch the HTML parser into escaped mode and swallow the rest of the page.)
       const safe = (str) => str.replace(/<\/(script)/gi, '<\\/$1').replace(new RegExp('<' + '!--', 'g'), '<\\!--');
       const tag = (t) => `<${t}>`;
-      const title = lastText.trim().split(/\s+/).slice(0, 8).join(' ').replace(/[<>&"]/g, '');
+      const title = lastWritten.trim().split(/\s+/).slice(0, 8).join(' ').replace(/[<>&"]/g, '');
       const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
@@ -403,7 +410,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 </body></html>`;
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-      a.download = smartFilename(lastText, lastVoice, 'html');
+      a.download = smartFilename(lastWritten, lastVoice, 'html');
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       const kb = Math.ceil(html.length / 1024);
@@ -759,8 +766,9 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     }
 
     /* Text → audio + word timings. Long text is chunked (and always MP3, since only MP3 concatenates). */
-    async function synthesizeText(text, voice, format) {
-      const chunks = chunkText(text);
+    async function synthesizeText(text, voice, format, { separateParagraphs = false } = {}) {
+      // With markup on, a long Edge pause is a paragraph break: synthesize each paragraph on its own
+      const chunks = separateParagraphs ? text.split(/\n\s*\n/).filter((p) => p.trim()).flatMap((p) => chunkText(p)) : chunkText(text);
       if (chunks.length > 1) {
         const { blob, boundaries } = await synthesizeChunked(chunks, voice);
         return { blob, boundaries, outFormat: 'mp3', chunks };
@@ -768,12 +776,6 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       const data = await doSynthesizeWithTiming(text, voice, format);
       return { blob: b64toBlob(data.audio, data.contentType), boundaries: data.boundaries || [], outFormat: format, chunks };
     }
-
-    // Markup tokens: lowered to what the chosen voice's provider understands (static/markup.js)
-    const markupBox = document.getElementById('markup');
-    try { markupBox.checked = localStorage.getItem('dan.markup') === '1'; } catch (e) {}
-    markupBox.addEventListener('change', () => { try { localStorage.setItem('dan.markup', markupBox.checked ? '1' : '0'); } catch (e) {} });
-    const textToSpeak = (raw, voice) => (markupBox.checked && window.danMarkup ? danMarkup.lower(raw, voice) : raw);
 
     btn.onclick = async () => {
       if (isSynthesizing) return;
@@ -784,8 +786,8 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       setLoading(true);
       logEl.textContent = 'Requesting...';
       try {
-        const { blob, boundaries, outFormat, chunks } = await synthesizeText(text, voice, format);
-        lastBlob = blob; lastExt = outFormat; lastText = text; lastVoice = voice;
+        const { blob, boundaries, outFormat, chunks } = await synthesizeText(text, voice, format, { separateParagraphs: markupBox.checked });
+        lastBlob = blob; lastExt = outFormat; lastText = text; lastWritten = writtenText(textArea.value); lastVoice = voice;
         downloadBtn.disabled = false;
         playerEl.src = URL.createObjectURL(blob);
         playerEl.style.display = '';
@@ -795,7 +797,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const parts = chunks.length > 1 ? `, ${chunks.length} paragraphs` : '';
         const note = outFormat !== format ? ` Long text is generated as MP3.` : '';
         logEl.textContent = `Done (${outFormat}, ${(blob.size / 1024).toFixed(1)} KB, ${boundaries.length} words${parts}).${note}`;
-        addHistory(text, voice, outFormat, blob);
+        addHistory(lastWritten, voice, outFormat, blob);
       } catch (err) {
         console.error(err);
         logEl.textContent = 'Error: ' + err.message;
@@ -858,7 +860,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         if (format === 'player') {
           // Show embed code modal
           const dataJson = JSON.stringify({
-            text: lastText,
+            text: lastWritten,
             voice: lastVoice,
             format: lastExt,
             audio: 'BASE64_AUDIO_DATA_HERE',
@@ -924,7 +926,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = smartFilename(lastText, lastVoice, ext);
+            a.download = smartFilename(lastWritten, lastVoice, ext);
             a.click();
             URL.revokeObjectURL(url);
           };
@@ -951,7 +953,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       const url = URL.createObjectURL(lastBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = smartFilename(lastText, lastVoice, lastExt);
+      a.download = smartFilename(lastWritten, lastVoice, lastExt);
       document.body.appendChild(a);
       a.click();
       a.remove();

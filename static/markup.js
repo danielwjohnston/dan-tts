@@ -5,26 +5,34 @@
 //   [spell: ABC]            spell the letters out                           (spoken "A B C")
 //
 // Anything else in square brackets is left alone, so citations like [1] or [citation needed]
-// read as they always did. Edge voices take no SSML, so a pause becomes punctuation (a comma,
-// a full stop, or a paragraph break for long pauses) and a respelling replaces the word;
-// ElevenLabs takes an inline <break time="0.4s" /> tag (3 s at most) and the same respellings.
-// strip() gives the written text with the tokens removed, for display and captions.
+// read as they always did. A token body stays on one line and holds no brackets, so a half-typed
+// token cannot swallow the paragraphs after it. Edge voices take no SSML, so a pause becomes
+// punctuation (a comma, a full stop, or a paragraph break, which the tester then synthesizes as
+// its own request) and a respelling replaces the word; ElevenLabs takes an inline
+// <break time="0.4s" /> tag (3 s at most) and the same respellings. strip() gives the written
+// text with the tokens removed; nothing displays it yet (highlighting and captions show the
+// spoken words), it is here for the display and caption path to come.
 (function (root) {
   const PAUSE_DEFAULT = 400, PAUSE_MIN = 100, PAUSE_MAX = 5000, ELEVEN_BREAK_MAX = 3000;
-  const TOKEN = /\[pause(?:\s+(\d+(?:\.\d+)?)\s*(ms|s))?\s*\]|\[(say|spell):\s*([^\]]*?)\s*\]/gi;
+  const TOKEN = /\[pause(?:[ \t]+(\d+(?:\.\d+)?)[ \t]*(ms|s))?[ \t]*\]|\[(say|spell):[ \t]*([^\[\]\n]*?)[ \t]*\]/gi;
+  // The word a respelling applies to: the run before the token, split into its core and the
+  // punctuation glued to its end (kept in both the written and the spoken text)
+  const WORD_BEFORE = /(\S*?)([^\p{L}\p{N}\s]*)$/u;
   const PROVIDERS = ['edge', 'elevenlabs'];
+  const str = (v) => (v == null ? '' : String(v));
 
   /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, anything else is Edge. */
   function providerOf(voice) {
-    return /^eleven:/i.test(voice || '') ? 'elevenlabs' : 'edge';
+    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : 'edge';
   }
 
   /** Text → segments: {type:'text', text} | {type:'pause', ms} | {type:'say', written, spoken} | {type:'spell', letters}. */
-  function parse(text) {
+  function parse(input) {
+    const text = str(input);
     const out = [];
     let last = 0;
     const pushText = (t) => { if (t) out.push({ type: 'text', text: t }); };
-    for (const m of String(text || '').matchAll(TOKEN)) {
+    for (const m of text.matchAll(TOKEN)) {
       let before = text.slice(last, m.index);
       if (m[0].toLowerCase().startsWith('[pause')) {
         pushText(before);
@@ -32,11 +40,14 @@
         ms = Math.min(PAUSE_MAX, Math.max(PAUSE_MIN, Math.round(ms)));
         out.push({ type: 'pause', ms });
       } else if (m[3].toLowerCase() === 'say') {
-        // The respelling applies to the word written right before the token
-        const word = before.match(/(\S+)$/);
-        if (word) before = before.slice(0, before.length - word[1].length);
-        pushText(before);
-        out.push({ type: 'say', written: word ? word[1] : '', spoken: m[4] });
+        const w = before.match(WORD_BEFORE);
+        const run = w ? w[1] : '', tail = w ? w[2] : '';
+        const lead = run.match(/^[^\p{L}\p{N}]*/u)[0]; // an opening quote or bracket stays written
+        const core = run.slice(lead.length);
+        pushText(before.slice(0, before.length - run.length - tail.length) + lead);
+        // An empty respelling leaves the word as it is; it never deletes it from the speech
+        out.push({ type: 'say', written: core, spoken: m[4] || core });
+        pushText(tail);
       } else {
         pushText(before);
         out.push({ type: 'spell', letters: m[4] });
@@ -49,34 +60,59 @@
 
   const hasMarkup = (text) => parse(text).some((s) => s.type !== 'text');
 
-  /** The written text with the tokens removed (what the reader shows and captions carry). */
-  function strip(text) {
-    return parse(text).map((s) => s.type === 'text' ? s.text : s.type === 'say' ? s.written : s.type === 'spell' ? s.letters : '').join('')
-      .replace(/[ \t]+([,.;:!?])/g, '$1').replace(/[ \t]{2,}/g, ' ').trim();
+  /** The written text with the tokens removed. Text without tokens comes back exactly as it was. */
+  function strip(input) {
+    const segs = parse(input);
+    if (!segs.some((s) => s.type !== 'text')) return str(input);
+    let out = '';
+    segs.forEach((s, i) => {
+      if (s.type === 'text') out += s.text;
+      else if (s.type === 'say') out += s.written;
+      else if (s.type === 'spell') out += s.letters;
+      else {
+        // A removed pause must not leave a doubled space, or a space before the punctuation that follows
+        const next = segs[i + 1];
+        if (next && next.type === 'text') {
+          if (/^[ \t]*[,.;:!?]/.test(next.text)) out = out.replace(/[ \t]+$/, '');
+          else if (/\s$/.test(out)) next.text = next.text.replace(/^[ \t]+/, '');
+        }
+      }
+    });
+    return out;
   }
 
   const spellOut = (letters) => letters.replace(/\s+/g, '').split('').join(' ');
 
   // Edge has no break tag: a short pause is a comma, a longer one a full stop, a long one a
-  // paragraph break (the tester and the reader already synthesize paragraphs one at a time).
+  // paragraph break. Nothing is added after a sentence end, an ellipsis, a clause end or a dash.
   function edgePause(prev, ms) {
-    const endsSentence = /[.!?]["')\]]*\s*$/.test(prev), endsClause = /[,;:]\s*$/.test(prev);
+    if (!prev.trim()) return '';
+    const endsSentence = /[.!?…]["')\]]*\s*$/.test(prev), endsClause = /[,;:\-–—]\s*$/.test(prev);
     if (ms >= 1200) return (endsSentence ? '' : '.') + '\n\n';
     if (ms >= 600) return endsSentence || endsClause ? ' ' : '. ';
     return endsSentence || endsClause ? ' ' : ', ';
   }
 
+  const breakTag = (ms) => `<break time="${(Math.min(ELEVEN_BREAK_MAX, ms) / 1000).toFixed(2).replace(/0$/, '')}s" />`;
+
   /** The text a provider should be sent. */
-  function lower(text, provider) {
+  function lower(input, provider) {
     if (PROVIDERS.indexOf(provider) < 0) provider = providerOf(provider);
+    const segs = parse(input);
     let out = '';
-    for (const s of parse(text)) {
-      if (s.type === 'text') out += s.text;
-      else if (s.type === 'say') out += s.spoken;
-      else if (s.type === 'spell') out += spellOut(s.letters);
-      else if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` <break time="${(Math.min(ELEVEN_BREAK_MAX, s.ms) / 1000).toFixed(1).replace(/\.0$/, '.0')}s" /> `;
+    segs.forEach((s, i) => {
+      if (s.type === 'text') { out += s.text; return; }
+      if (s.type === 'say') { out += s.spoken; return; }
+      if (s.type === 'spell') { out += spellOut(s.letters); return; }
+      // A pause. Punctuation written right after it belongs to the word before it: "word [pause]." → "word."
+      const next = segs[i + 1];
+      const glued = next && next.type === 'text' ? next.text.match(/^[ \t]*([,.;:!?]+["')\]]*)/) : null;
+      if (glued) { out = out.replace(/[ \t]+$/, '') + glued[1]; next.text = next.text.slice(glued[0].length); }
+      const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
+      if (!rest) return; // nothing is spoken after it
+      if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
       else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
-    }
+    });
     return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
   }
 

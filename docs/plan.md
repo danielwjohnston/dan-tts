@@ -58,9 +58,9 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Design:** the spec's tokens (`[pause 400ms]`, `[say: Ker-nel]`, `[spell: SSML]`, `[slow]…[/slow]`) in one shared module with tests; each provider gets what it understands: Azure full SSML; ElevenLabs `<break time>` and respelled text; Edge respelled text, punctuation-based pauses and prosody. Captions carry the spoken words, never the markup.
 
-**Done when:** `tokensToSsml` and the per-provider lowering have unit tests; the tester has the Markup toggle and preview; highlighting survives a pause.
+**Done when:** `lower()` and the per-provider lowering have unit tests; the tester has the Markup toggle and preview; highlighting survives a pause.
 
-**Status (2026-10-26):** phase 1 built. `static/markup.js` parses `[pause]`, `[pause 800ms]`, `word[say: respelling]` and `[spell: ABC]`, leaves other brackets alone, and lowers per provider: Edge gets punctuation for pauses (comma, full stop, paragraph break) and plain respellings; ElevenLabs gets `<break time>` tags (3 s cap) and the same respellings; `strip()` gives the written text. The tester has a "Markup tokens" switch that lowers the text for the chosen voice before synthesis. Listening checks with real voices, the toolbar (phase 2) and the extension (phase 3) remain.
+**Status (2026-10-26):** phase 1 built. `static/markup.js` parses `[pause]`, `[pause 800ms]`, `word[say: respelling]` and `[spell: ABC]`, leaves other brackets alone, and lowers per provider: Edge gets punctuation for pauses (comma, full stop, paragraph break) and plain respellings; ElevenLabs gets `<break time>` tags (3 s cap) and the same respellings; `strip()` gives the written text. The tester's "Markup tokens" switch lowers the text for the chosen voice before synthesis (Synthesize and Batch), and synthesizes each paragraph of lowered text as its own request so a long Edge pause is a real gap. Listening checks with real voices, the text preview and toolbar (phase 2) and the extension (phase 3) remain.
 
 ### C. Server voices in the extension and desktop app
 

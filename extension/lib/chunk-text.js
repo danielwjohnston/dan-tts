@@ -3,7 +3,8 @@
 // merged up to `target` chars, and oversized ones are split at sentence ends.
 (function (root) {
   function splitLong(para, max) {
-    const sentences = para.match(/[^.!?]+(?:[.!?]+["')\]]*\s*|$)/g) || [para];
+    // A dot between digits (3.50, a <break time="1.5s" /> tag) is not a sentence end
+    const sentences = para.match(/(?:[^.!?]|(?<=\d)\.(?=\d))+(?:[.!?]+["')\]]*\s*|$)/g) || [para];
     const out = [];
     let cur = '';
     for (const s of sentences) {
