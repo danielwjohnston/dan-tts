@@ -2,6 +2,8 @@
 // Dependency-free. Works anywhere with a WebSocket that can reach the service:
 //  - Node / Electron: pass { headers } via the WebSocket constructor (see makeNodeSocket)
 //  - Browser extension: headers are added by declarativeNetRequest rules instead
+// Azure AI Speech speaks the same protocol: pass its URL as connectionUrl (and voiceListUrl) and
+// the caller's socket factory adds the key header; no Edge token is used then.
 import { generateSecMsGec, TRUSTED_CLIENT_TOKEN } from './drm.js';
 
 const CHROMIUM_FULL_VERSION = '143.0.3650.75';
@@ -70,16 +72,17 @@ function parseBinaryFrame(buf) {
  * @param {string} [opts.voice]  e.g. 'en-US-AriaNeural'
  * @param {string} [opts.rate]   e.g. '+0%', '+50%'
  * @param {(url: string) => WebSocket | Promise<WebSocket>} opts.openSocket  platform-specific socket factory
+ * @param {string} [opts.connectionUrl]  full wss URL to use instead of Edge's (Azure); no Sec-MS-GEC token is added
  * @returns {Promise<{ audio: Uint8Array, boundaries: {offset:number,duration:number,text:string}[] }>}
  */
-export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pitch = '+0Hz', volume = '+0%', openSocket, timeoutMs = 60000 } = {}) {
+export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pitch = '+0Hz', volume = '+0%', openSocket, timeoutMs = 60000, connectionUrl: wsUrl } = {}) {
   if (!openSocket) throw new Error('openSocket is required');
   const ssml =
     "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
     `<voice name='${escapeXml(voice)}'><prosody pitch='${pitch}' rate='${rate}' volume='${volume}'>` +
     `${escapeXml(cleanText(text))}</prosody></voice></speak>`;
 
-  return Promise.resolve(openSocket(connectionUrl())).then((ws) => new Promise((resolve, reject) => {
+  return Promise.resolve(openSocket(wsUrl || connectionUrl())).then((ws) => new Promise((resolve, reject) => {
     ws.binaryType = 'arraybuffer';
     const parts = [];
     const boundaries = [];
@@ -106,7 +109,9 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
         const { headers, body } = parseTextFrame(ev.data);
         if (headers.Path === 'audio.metadata') {
           for (const m of JSON.parse(body).Metadata) {
-            if (m.Type === 'WordBoundary') {
+            // Azure's full service also reports punctuation marks this way (BoundaryType PunctuationBoundary);
+            // they are not words to highlight. Edge sends words only.
+            if (m.Type === 'WordBoundary' && m.Data.text?.BoundaryType !== 'PunctuationBoundary') {
               boundaries.push({ offset: m.Data.Offset, duration: m.Data.Duration, text: unescapeXml(m.Data.text.Text) });
             }
           }
@@ -133,10 +138,11 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
 /**
  * List available voices. Needs the same headers as synthesis: pass { headers } in
  * Node/Electron; in an extension the declarativeNetRequest rule supplies them.
+ * With voiceListUrl (Azure) that URL is fetched as given, with no token.
  * @returns {Promise<{ShortName:string, Locale:string, Gender:string, FriendlyName:string}[]>}
  */
-export async function listVoices({ fetchImpl = globalThis.fetch, headers } = {}) {
-  const url = `${VOICES_URL}&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
+export async function listVoices({ fetchImpl = globalThis.fetch, headers, voiceListUrl } = {}) {
+  const url = voiceListUrl || `${VOICES_URL}&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;
   const res = await fetchImpl(url, headers ? { headers } : undefined);
   if (!res.ok) throw new Error(`Voice list failed: HTTP ${res.status}`);
   return res.json();

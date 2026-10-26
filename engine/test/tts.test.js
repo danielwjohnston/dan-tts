@@ -22,7 +22,7 @@ function fakeSocket(script, { open = false } = {}) {
   };
 }
 
-const meta = (text, offset, duration) => textFrame('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: offset, Duration: duration, text: { Text: text } } }] }));
+const meta = (text, offset, duration, boundaryType) => textFrame('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: offset, Duration: duration, text: boundaryType ? { Text: text, Length: text.length, BoundaryType: boundaryType } : { Text: text } } }] }));
 
 test('collects audio and word boundaries until turn.end', async () => {
   const script = [textFrame('turn.start', '{}'), meta('Hello', 1000000, 4000000), binaryFrame('audio', new Uint8Array([1, 2, 3])),
@@ -64,6 +64,38 @@ test('strips control characters the service rejects', async () => {
 
 test('48 kbps CBR byte-to-tick conversion', () => {
   assert.strictEqual(mp3BytesToTicks(6000), 10_000_000); // 6000 bytes = 1 second
+});
+
+// ---- Azure AI Speech: the same protocol on another URL, with a key header instead of the Edge token ----
+
+const AZURE_URL = 'wss://eastus.tts.speech.microsoft.com/cognitiveservices/websocket/v1?X-ConnectionId=0123456789abcdef0123456789abcdef';
+
+test('connectionUrl replaces the Edge URL and gets no Sec-MS-GEC token', async () => {
+  const script = [meta('Hello', 1000000, 4000000, 'WordBoundary'), binaryFrame('audio', new Uint8Array([7])), textFrame('turn.end', '{}')];
+  const r = await synthesize('Hello', { voice: 'en-US-JennyNeural', openSocket: fakeSocket(script, { open: true }), connectionUrl: AZURE_URL });
+  assert.strictEqual(fakeSocket.last.url, AZURE_URL);
+  assert.ok(!/Sec-MS-GEC|TrustedClientToken/.test(fakeSocket.last.url));
+  assert.match(fakeSocket.last.sent[1], /<voice name='en-US-JennyNeural'>/);
+  assert.deepStrictEqual(Array.from(r.audio), [7]);
+  assert.deepStrictEqual(r.boundaries, [{ offset: 1000000, duration: 4000000, text: 'Hello' }]);
+});
+
+test('punctuation boundaries (Azure) are skipped; Edge-style entries without a type are kept', async () => {
+  const script = [meta('Hello', 0, 4000000, 'WordBoundary'), meta(',', 4000000, 500000, 'PunctuationBoundary'), meta('world', 5000000, 4000000),
+    binaryFrame('audio', new Uint8Array([1])), textFrame('turn.end', '{}')];
+  const r = await synthesize('Hello, world', { openSocket: fakeSocket(script) });
+  assert.deepStrictEqual(r.boundaries.map((b) => b.text), ['Hello', 'world']);
+});
+
+test('listVoices fetches voiceListUrl as given, with the caller\'s headers and no token', async () => {
+  let called;
+  const fetchImpl = async (url, init) => { called = { url, init }; return { ok: true, json: async () => [{ ShortName: 'en-US-JennyNeural' }] }; };
+  const { listVoices } = await import('../src/tts.js');
+  const url = 'https://eastus.tts.speech.microsoft.com/cognitiveservices/voices/list';
+  const voices = await listVoices({ fetchImpl, headers: { 'Ocp-Apim-Subscription-Key': 'k' }, voiceListUrl: url });
+  assert.deepStrictEqual(voices, [{ ShortName: 'en-US-JennyNeural' }]);
+  assert.strictEqual(called.url, url);
+  assert.deepStrictEqual(called.init, { headers: { 'Ocp-Apim-Subscription-Key': 'k' } });
 });
 
 test('listVoices sends the token and returns the JSON list', async () => {
