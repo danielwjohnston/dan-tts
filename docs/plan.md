@@ -82,6 +82,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Status (2026-10-26):** researched; decided; spike under way. [`docs/spikes/offline-voice.md`](spikes/offline-voice.md) compares the engines and recommends Piper through onnxruntime-web with its alignment patch for the first slice (fits Firefox's 200 MB limit, real time on one thread, native word timings), with Kokoro-82M as the better-sounding second slice where WebGPU or the desktop app's native runtime is available. **Decisions (owner, 2026-10-26):** the project is licensed GPL-3.0-or-later (`LICENSE`); the first offline voice is Piper with the public-domain `en_US-ljspeech-medium` voice; Azure AI Speech is wanted as the next provider (key to come).
 
+**Status (2026-10-26, spike done):** licence GPL-3.0 and voice `en_US-ljspeech-medium` decided; the Node-level spike ([`docs/spikes/offline-voice-piper-results.md`](spikes/offline-voice-piper-results.md)) confirms the path: the alignment-patched voice runs under onnxruntime-web 1.30.0 (WASM, one thread) at RTF 0.29 to 0.35 on a 2.1 GHz Xeon core, 2.2 s model load, about 97 MB to bundle, word timings exact to the model's frames. Two corrections to the plan: eSpeak merges function words, so words are mapped by a phoneme-level alignment rather than by counting spaces; and memory grows about 23 MB per second of audio per model run, so inputs are capped near 12 s and chunks are sentence-sized. Next: `extension/engine/piper.js` in a Worker, the Firefox shared-memory check, the GPL-3.0 LICENSE file.
+
 ### E. Public listing
 
 Only after A and D, per the terms decision: public builds default to a licensed or offline voice; Edge stays the self-hosted default. Firefox signing, Chrome Web Store, Calibre index, in that order.
