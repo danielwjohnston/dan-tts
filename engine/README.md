@@ -41,4 +41,4 @@ const { audio, boundaries } = await synthesize('Hello world', { voice: 'en-US-Ar
 - `examples/cloudflare-worker/`: minimal Worker relay. Run with `npx wrangler dev` from that folder.
 
 ## Terms
-This talks to the same endpoint Edge's built-in Read Aloud uses, in the same way the edge-tts Python library does. It's fine for personal use; Microsoft can change or block it at any time.
+This talks to the same endpoint Edge's built-in Read Aloud uses, in the same way the edge-tts Python library does. dan-tts uses Microsoft Edge's Read Aloud service unofficially, the way the edge-tts library does. It is for personal use, is not affiliated with Microsoft, and can stop working at any time. See [`docs/edge-terms-decision.md`](../docs/edge-terms-decision.md) for what is and isn't distributed publicly.

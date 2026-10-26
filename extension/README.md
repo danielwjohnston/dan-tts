@@ -67,7 +67,7 @@ Change the shortcut at `chrome://extensions/shortcuts`.
 | Optional: access to a site (asked once per site) | Only requested when you read a PDF hosted there, so the PDF can be downloaded into the reader. |
 | `contextMenus`, `storage` | The right-click items, plus remembering your voice, speed and reading positions. These stay in your browser. |
 
-Nothing you read is sent anywhere except the text itself, which goes to Microsoft's voice service to be spoken. Scanned pages are recognized locally, and the only download is the language data file from jsDelivr (a public CDN), the first time.
+Nothing you read is sent anywhere except the text itself, which goes to Microsoft's voice service to be spoken. dan-tts uses Microsoft Edge's Read Aloud service unofficially, the way the edge-tts library does. It is for personal use, is not affiliated with Microsoft, and can stop working at any time. See [`docs/edge-terms-decision.md`](../docs/edge-terms-decision.md) for what is and isn't distributed publicly. Scanned pages are recognized locally, and the only download is the language data file from jsDelivr (a public CDN), the first time.
 
 ## Limitations
 - Books: chapters are read from the EPUB's text. Pictures, footnote popups and layout are skipped, and some scanned books have poor text.

@@ -21,7 +21,7 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - ~~**Run the extension's end-to-end tests in CI**~~ — Done: CI runs the Chromium and Firefox tests on every change
 - ~~**Continue to next page**~~ — Done: a page with a same-site "next" link offers it at the end of the text; "Always on this site" continues on its own. In the extension and the desktop app
 - ~~**Edge endpoint health check**~~ — Done: `.github/workflows/edge-health.yml` runs `scripts/edge-health.mjs` every six hours (voice list and a short synthesis, from Node and through the Worker) and keeps a GitHub issue open while it fails
-- **Decide Edge terms for public release** — written decision on whether the unofficial endpoint and spoofed browser headers are acceptable for public distribution. Gates the Calibre plugin release
+- ~~**Decide Edge terms for public release**~~ — Written: [`docs/edge-terms-decision.md`](docs/edge-terms-decision.md). Edge stays the engine for personal and self-hosted use; nothing listed on a public store or index ships it. The Calibre plugin can ship as install-from-file
 
 ## Medium-Term
 
@@ -42,6 +42,8 @@ Future feature ideas, roughly prioritized. Nothing here is committed — just do
 - **Keep the Firefox add-on installed** — Firefox only keeps signed add-ons. Sign the build as an unlisted add-on in CI (`web-ext sign`, needs free addons.mozilla.org API keys as repository secrets) and attach the `.xpi` to releases
 - **Desktop auto-update** — after releases exist: check the latest release on start and offer to update (`electron-updater`)
 - **Phone** — the reader as an installable web app (PWA) that appears in the phone's Share menu, so "Share → dan-tts" reads an article. Needs the Worker (or another server) for page downloads and voice headers, since a web page can't set them itself
+- **Voice provider seam** — `provider: edge | azure` on the Worker and the Python server, the Azure AI Speech key kept as a server secret. Same voices, legitimately, with full SSML; free for 0.5 million characters a month. Required before any store or index listing (see the Edge terms decision)
+- **Offline voice** — a Piper voice (the `voice-training/` work) in the extension and the desktop app, with word timings for highlighting. No terms, no network; the other prerequisite for a public listing
 - **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
 ## Voice Training (in-house voice, PR #18)
