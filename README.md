@@ -36,7 +36,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
+Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. Likewise, set `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` (for example `eastus`) and the region's English Azure AI Speech voices join as `azure:<name>`; Azure's free tier allows 500,000 characters a month, counted in the Azure portal. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The keys are only ever read on the server; see `worker/README.md` for the Cloudflare steps and what each free plan allows.
 
 ## Usage
 
@@ -95,16 +95,20 @@ on every push to `main` and preview every other branch; the build step assembles
 1. Sign in at https://render.com with GitHub (no card needed for the free plan).
 2. **New → Blueprint**, pick this repo, and click **Apply**.
 3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
-4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices.
+4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices, or `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` for Azure AI Speech voices.
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
+
+## Licence
+
+GNU General Public License v3.0 or later (see `LICENSE`). This lets the project ship the offline voice it has chosen (Piper and the eSpeak-ng phonemizer are GPL-3.0). Third-party libraries bundled with the extension keep their own licences (see `extension/lib/`); the voices served by Microsoft Edge, ElevenLabs and Azure are governed by those services' terms, and any Piper voice shipped must be public domain or similarly free (`docs/spikes/offline-voice.md`).
 
 ## Tests
 
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q
-node --test tests/chunk-text.test.js tests/bundle.test.js   # chunker, zip/SRT
+node --test tests/chunk-text.test.js tests/bundle.test.js tests/markup.test.js   # chunker, zip/SRT, markup tokens
 node --test worker/test/*.test.js                           # Cloudflare Worker routes and Load from URL
 ```
 

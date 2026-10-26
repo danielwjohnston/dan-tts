@@ -203,3 +203,152 @@ test('/usage reports Edge as unlimited and ElevenLabs credits when configured', 
   await Promise.all([callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage')]);
   assert.strictEqual(upstream, 1);
 });
+
+// ---- Azure provider through the routes (fetch, the socket handshake and the cache are stubbed) ----
+const AZURE_ENV = { AZURE_SPEECH_KEY: 'azure-secret', AZURE_SPEECH_REGION: 'eastus' };
+const AZURE_VOICES = [
+  { Name: 'Microsoft Server Speech Text to Speech Voice (en-US, JennyNeural)', DisplayName: 'Jenny', ShortName: 'en-US-JennyNeural', Gender: 'Female', Locale: 'en-US', LocaleName: 'English (United States)', StyleList: ['chat'], VoiceType: 'Neural', Status: 'GA' },
+  { Name: 'Microsoft Server Speech Text to Speech Voice (de-DE, KatjaNeural)', DisplayName: 'Katja', ShortName: 'de-DE-KatjaNeural', Gender: 'Female', Locale: 'de-DE', LocaleName: 'German (Germany)', VoiceType: 'Neural', Status: 'GA' },
+];
+
+// A Workers-style socket: fetch() answers the Upgrade with { webSocket }, which the Worker accept()s
+function socketResponse(script) {
+  const listeners = {};
+  const ws = {
+    binaryType: 'blob', sent: [], accept() { ws.accepted = true; }, close() {},
+    addEventListener(type, fn) { listeners[type] = fn; },
+    send(d) { ws.sent.push(d); if (ws.sent.length === 2) queueMicrotask(() => script.forEach((f) => listeners.message?.({ data: f }))); },
+  };
+  return { status: 101, webSocket: ws };
+}
+const wsText = (path, body) => `X-RequestId:abc\r\nContent-Type:application/json\r\nPath:${path}\r\n\r\n${body}`;
+const wsBinary = (bytes) => {
+  const header = new TextEncoder().encode('X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nPath:audio\r\n');
+  const buf = new Uint8Array(2 + header.length + bytes.length);
+  buf[0] = header.length >> 8; buf[1] = header.length & 255;
+  buf.set(header, 2); buf.set(bytes, 2 + header.length);
+  return buf.buffer;
+};
+const wsMeta = (text, offset, duration) => wsText('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: offset, Duration: duration, text: { Text: text, Length: text.length, BoundaryType: 'WordBoundary' } } }] }));
+const SPEECH = [wsText('turn.start', '{}'), wsMeta('Hi', 0, 3_000_000), wsBinary(new Uint8Array([0x49, 0x44, 0x33])), wsText('turn.end', '{}')];
+const SPEECH_B64 = Buffer.from('ID3').toString('base64');
+
+function stubAzure(t, { voicesStatus = 200, handshakeStatus = 101 } = {}) {
+  const realFetch = globalThis.fetch;
+  const realCaches = globalThis.caches;
+  globalThis.caches = { default: { match: async () => undefined, put: async () => {} } };
+  const seen = { handshakes: [], voiceLists: [] };
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const json = (d, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'Content-Type': 'application/json' } });
+    if (url.startsWith('https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list')) return json(EDGE_VOICES);
+    if (url.startsWith('https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1')) {
+      seen.handshakes.push({ url, headers: init.headers });
+      return socketResponse(SPEECH);
+    }
+    if (url.startsWith('https://api.elevenlabs.io/v2/voices')) return json({ voices: [{ voice_id: 'aaaaaaaaaaaa', name: 'Adam', category: 'premade', labels: {}, preview_url: '' }] });
+    if (url === 'https://eastus.tts.speech.microsoft.com/cognitiveservices/voices/list') {
+      seen.voiceLists.push(init.headers);
+      return voicesStatus === 200 ? json(AZURE_VOICES) : new Response('', { status: voicesStatus });
+    }
+    if (url.startsWith('https://eastus.tts.speech.microsoft.com/cognitiveservices/websocket/v1?X-ConnectionId=')) {
+      seen.handshakes.push({ url, headers: init.headers });
+      return handshakeStatus === 101 ? socketResponse(SPEECH) : new Response('', { status: handshakeStatus });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; globalThis.caches = realCaches; });
+  return seen;
+}
+
+test('/health lists azure only when both secrets are set', async () => {
+  assert.deepStrictEqual((await callWith(AZURE_ENV, '/health').then((r) => r.json())).providers, ['edge', 'azure']);
+  assert.deepStrictEqual((await callWith({ ...ELEVEN_ENV, ...AZURE_ENV }, '/health').then((r) => r.json())).providers, ['edge', 'elevenlabs', 'azure']);
+  assert.deepStrictEqual((await callWith({ AZURE_SPEECH_KEY: 'k' }, '/health').then((r) => r.json())).providers, ['edge']);
+  assert.deepStrictEqual((await callWith({ AZURE_SPEECH_REGION: 'eastus' }, '/health').then((r) => r.json())).providers, ['edge']);
+});
+
+test('/voices merges Edge, ElevenLabs and Azure (English only) voices, each with its provider', async (t) => {
+  const seen = stubAzure(t);
+  const voices = await callWith({ ...ELEVEN_ENV, ...AZURE_ENV }, '/voices').then((r) => r.json());
+  assert.deepStrictEqual(voices.map((v) => [v.shortName, v.provider, v.sampleUrl]), [
+    ['en-US-AriaNeural', 'edge', '/samples/en-US-AriaNeural'],
+    ['eleven:aaaaaaaaaaaa', 'elevenlabs', '/samples/eleven:aaaaaaaaaaaa'],
+    ['azure:en-US-JennyNeural', 'azure', '/samples/azure:en-US-JennyNeural'],
+  ]);
+  assert.deepStrictEqual(seen.voiceLists, [{ 'Ocp-Apim-Subscription-Key': 'azure-secret' }]);
+  assert.deepStrictEqual(voices[2].styleList, ['chat']);
+  assert.strictEqual(voices[2].name, 'Jenny');
+});
+
+test('/voices still returns the other voices when the Azure listing fails, uncached', async (t) => {
+  stubAzure(t, { voicesStatus: 401 });
+  const errors = []; const realError = console.error; console.error = (m) => errors.push(m);
+  t.after(() => { console.error = realError; });
+  const res = await callWith({ ...ELEVEN_ENV, ...AZURE_ENV }, '/voices');
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+  assert.deepStrictEqual((await res.json()).map((v) => v.shortName), ['en-US-AriaNeural', 'eleven:aaaaaaaaaaaa']);
+  assert.match(errors.join('\n'), /Azure voice list unavailable: Azure rejected the key or region/);
+});
+
+test('azure: voices go through the Worker socket with the key header, for timing, export and samples', async (t) => {
+  const seen = stubAzure(t);
+  const body = { text: 'Hi', voice: 'azure:en-US-JennyNeural' };
+  const timing = await callWith(AZURE_ENV, '/synthesize_with_timing', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.json());
+  assert.strictEqual(timing.audio, SPEECH_B64);
+  assert.deepStrictEqual(timing.boundaries, [{ offset: 0, duration: 3_000_000, text: 'Hi' }]);
+  assert.strictEqual(seen.handshakes.length, 1);
+  assert.match(seen.handshakes[0].url, /^https:\/\/eastus\.tts\.speech\.microsoft\.com\/cognitiveservices\/websocket\/v1\?X-ConnectionId=[0-9a-f]{32}$/);
+  assert.deepStrictEqual(seen.handshakes[0].headers, { Upgrade: 'websocket', 'Ocp-Apim-Subscription-Key': 'azure-secret' }); // no Edge headers, no token
+
+  const srt = await callWith(AZURE_ENV, '/export?format=srt', { method: 'POST', body: JSON.stringify(body) });
+  assert.strictEqual(srt.status, 200);
+  assert.match(await srt.text(), /00:00:00,000 --> 00:00:00,300\nHi/);
+
+  const sample = await callWith(AZURE_ENV, '/samples/azure:en-US-JennyNeural');
+  assert.strictEqual(sample.status, 200);
+  assert.strictEqual(sample.headers.get('content-type'), 'audio/mpeg');
+  assert.strictEqual(await sample.text(), 'ID3');
+});
+
+test('Edge voices still open the socket with the Edge URL, token and browser headers', async (t) => {
+  const seen = stubAzure(t);
+  const res = await callWith(AZURE_ENV, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'en-US-AriaNeural' }) });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(await res.text(), 'ID3');
+  assert.match(seen.handshakes[0].url, /speech\.platform\.bing\.com.*TrustedClientToken=.*Sec-MS-GEC=[0-9A-F]{16}-[0-9A-F]{64}/);
+  assert.strictEqual(seen.handshakes[0].headers.Origin, 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold');
+  assert.strictEqual(seen.handshakes[0].headers['Ocp-Apim-Subscription-Key'], undefined);
+});
+
+test('a refused Azure handshake is reported in plain words with the same status codes as the Python server', async (t) => {
+  for (const [handshakeStatus, status, words] of [[401, 502, /rejected the key or region/], [403, 502, /AZURE_SPEECH_REGION/], [429, 429, /rate-limiting/], [500, 502, /HTTP 500/]]) {
+    const errors = []; const realError = console.error; console.error = (m) => errors.push(m);
+    stubAzure(t, { handshakeStatus });
+    const res = await callWith(AZURE_ENV, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'azure:en-US-JennyNeural' }) });
+    console.error = realError;
+    assert.strictEqual(res.status, status);
+    assert.match((await res.json()).detail, words);
+    assert.deepStrictEqual(errors, [], 'a provider error is not an internal error');
+  }
+});
+
+test('azure: voices are rejected clearly when the secrets are missing', async () => {
+  const res = await post('/synthesize', { text: 'Hi', voice: 'azure:en-US-JennyNeural' });
+  assert.strictEqual(res.status, 503);
+  assert.match((await res.json()).detail, /AZURE_SPEECH_KEY and AZURE_SPEECH_REGION/);
+  assert.strictEqual((await callWith({ AZURE_SPEECH_KEY: 'k' }, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'azure:en-US-JennyNeural' }) })).status, 503);
+  assert.strictEqual((await call('/samples/azure:en-US-JennyNeural')).status, 503);
+  assert.strictEqual((await post('/synthesize', { text: 'Hi', voice: 'azure:en-US-Ava:DragonHDLatestNeural' })).status, 400);
+  assert.strictEqual((await call('/samples/azure:bad')).status, 400);
+});
+
+test('/usage carries the Azure note when configured; Azure has no usage endpoint', async (t) => {
+  stubAzure(t);
+  assert.deepStrictEqual(await callWith(AZURE_ENV, '/usage').then((r) => r.json()), {
+    edge: { unlimited: true },
+    azure: { tracked: false, note: 'Azure reports usage in its portal; the free tier is 500,000 characters a month' },
+  });
+  assert.deepStrictEqual(await callWith({}, '/usage').then((r) => r.json()), { edge: { unlimited: true } });
+});

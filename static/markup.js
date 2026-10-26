@@ -9,21 +9,25 @@
 // token cannot swallow the paragraphs after it. Edge voices take no SSML, so a pause becomes
 // punctuation (a comma, a full stop, or a paragraph break, which the tester then synthesizes as
 // its own request) and a respelling replaces the word; ElevenLabs takes an inline
-// <break time="0.4s" /> tag (3 s at most) and the same respellings. strip() gives the written
-// text with the tokens removed; nothing displays it yet (highlighting and captions show the
-// spoken words), it is here for the display and caption path to come.
+// <break time="0.4s" /> tag (3 s at most) and the same respellings. Azure voices are lowered
+// like Edge for now; Azure takes full SSML, so real break tags (and more) can follow once the
+// server passes SSML through. strip() gives the written text with the tokens removed; nothing
+// displays it yet (highlighting and captions show the spoken words), it is here for the display
+// and caption path to come. The *Edit helpers at the end build the edits behind the tester's
+// toolbar buttons; previewSlice() picks the text a preview reads.
 (function (root) {
   const PAUSE_DEFAULT = 400, PAUSE_MIN = 100, PAUSE_MAX = 5000, ELEVEN_BREAK_MAX = 3000;
   const TOKEN = /\[pause(?:[ \t]+(\d+(?:\.\d+)?)[ \t]*(ms|s))?[ \t]*\]|\[(say|spell):[ \t]*([^\[\]\n]*?)[ \t]*\]/gi;
   // The word a respelling applies to: the run before the token, split into its core and the
   // punctuation glued to its end (kept in both the written and the spoken text)
   const WORD_BEFORE = /(\S*?)([^\p{L}\p{N}\s]*)$/u;
-  const PROVIDERS = ['edge', 'elevenlabs'];
+  const PROVIDERS = ['edge', 'elevenlabs', 'azure'];
   const str = (v) => (v == null ? '' : String(v));
 
-  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, anything else is Edge. */
+  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, "azure:<name>" is Azure, anything else is Edge. */
   function providerOf(voice) {
-    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : 'edge';
+    const v = str(voice);
+    return /^eleven:/i.test(v) ? 'elevenlabs' : /^azure:/i.test(v) ? 'azure' : 'edge';
   }
 
   /** Text → segments: {type:'text', text} | {type:'pause', ms} | {type:'say', written, spoken} | {type:'spell', letters}. */
@@ -109,14 +113,145 @@
       const glued = next && next.type === 'text' ? next.text.match(/^[ \t]*([,.;:!?]+["')\]]*)/) : null;
       if (glued) { out = out.replace(/[ \t]+$/, '') + glued[1]; next.text = next.text.slice(glued[0].length); }
       const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
-      if (!rest) return; // nothing is spoken after it
+      if (!rest || !out.trim()) return; // nothing is spoken after it, or before it
       if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
-      else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
+      else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms); // Edge, and Azure until SSML goes through
     });
     return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
   }
 
-  const api = { parse, strip, lower, hasMarkup, providerOf, PAUSE_DEFAULT, PAUSE_MIN, PAUSE_MAX };
+  /* ---- Toolbar edits (the tester's insert buttons) ----
+     Each returns {start, end, insert, select, note}: replace text[start, end) with insert, then select
+     [s, e] in the new text. insert is missing when only the selection moves; note is a line for the
+     user. The tester applies them as an editing command, so Ctrl+Z undoes them. */
+  const clampPos = (text, pos) => Math.min(Math.max(0, Math.floor(Number(pos) || 0)), text.length);
+  const range = (text, s, e) => { s = clampPos(text, s); e = clampPos(text, e); return s <= e ? [s, e] : [e, s]; };
+  // A word as the toolbar sees it: no whitespace and no brackets, so a token next to a word is not part of it
+  const WORD_CHAR = /[^\s\[\]]/, WORD_RUN = /[^\s\[\]]+/g;
+  const SAY_AT = /\[say:[ \t]*([^\[\]\n]*?)[ \t]*\]/iy;
+  // A token sits apart from the words around it, but closing punctuation may follow it directly
+  const spaceBefore = (text, pos) => (pos > 0 && !/\s/.test(text[pos - 1]) ? ' ' : '');
+  const spaceAfter = (text, pos) => (pos < text.length && !/[\s,.;:!?)\]}"'’”…]/.test(text[pos]) ? ' ' : '');
+
+  /** The token for a pause of ms milliseconds: [pause 800ms], [pause 1.5s]. */
+  function pauseToken(ms) {
+    ms = Math.min(PAUSE_MAX, Math.max(PAUSE_MIN, Math.round(Number(ms) || PAUSE_DEFAULT)));
+    return `[pause ${ms < 1000 ? `${ms}ms` : `${ms / 1000}s`}]`;
+  }
+
+  /** Insert a pause at the caret, spaced from the words around it; the caret lands after it.
+      A caret inside a token, or right before a word's [say: …], moves past the token first. */
+  function pauseEdit(input, caret, ms) {
+    const text = str(input);
+    let at = clampPos(text, caret);
+    for (const m of text.matchAll(TOKEN)) {
+      const end = m.index + m[0].length;
+      if (m.index > at) break;
+      if ((m.index < at && at < end) || (m.index === at && /^\[say/i.test(m[0]))) { at = end; break; }
+    }
+    const insert = spaceBefore(text, at) + pauseToken(ms) + spaceAfter(text, at);
+    return { start: at, end: at, insert, select: [at + insert.length, at + insert.length] };
+  }
+
+  // The whitespace-free run around pos (pos may sit at either end of it), or null
+  function runAround(text, pos) {
+    let s = pos, e = pos;
+    while (s > 0 && WORD_CHAR.test(text[s - 1])) s--;
+    while (e < text.length && WORD_CHAR.test(text[e])) e++;
+    return s < e ? { start: s, end: e } : null;
+  }
+
+  // A [say: …] token starting exactly at pos, with the position of its body, or null
+  function sayTokenAt(text, pos) {
+    SAY_AT.lastIndex = pos;
+    const m = SAY_AT.exec(text);
+    if (!m) return null;
+    const bodyStart = pos + m[0].match(/^\[say:[ \t]*/i)[0].length;
+    return { start: pos, end: pos + m[0].length, body: [bodyStart, bodyStart + m[1].length] };
+  }
+
+  /** Respell the selected word (the last one, if several) or the word at the caret: word[say: word],
+      with the respelling selected to type over. A word that already has one gets its respelling selected. */
+  function sayEdit(input, selStart, selEnd) {
+    const text = str(input);
+    const [a, b] = range(text, selStart, selEnd);
+    const spans = [...text.matchAll(TOKEN)].map((m) => ({ start: m.index, end: m.index + m[0].length, say: /^\[say/i.test(m[0]) }));
+    const insideToken = (pos) => spans.find((t) => t.start < pos && pos < t.end);
+    const noWord = { note: 'Put the caret on a word, or select one, to respell it.' };
+    let runs = a === b
+      ? [runAround(text, a)].filter(Boolean)
+      : [...text.slice(a, b).matchAll(WORD_RUN)].map((m) => ({ start: a + m.index, end: a + m.index + m[0].length }));
+    runs = runs.filter((r) => !insideToken(r.start)); // a token's own words are not candidates
+    if (!runs.length) {
+      const t = insideToken(a);
+      return t && t.say ? { select: sayTokenAt(text, t.start).body, note: 'Type the new respelling.' } : noWord;
+    }
+    // The last selected run that has letters in it (a trailing dash or ellipsis is not a word)
+    let w, word, lead, core = '';
+    for (let k = runs.length - 1; k >= 0 && !core; k--) {
+      w = runAround(text, runs[k].start);
+      word = text.slice(w.start, w.end);
+      lead = word.match(/^[^\p{L}\p{M}\p{N}]*/u)[0]; // an opening quote stays outside
+      core = word.slice(lead.length).replace(/[^\p{L}\p{M}\p{N}]+$/u, ''); // so does glued punctuation
+    }
+    if (!core) return noWord;
+    const coreEnd = w.start + lead.length + core.length;
+    const several = runs.length > 1 ? ` Several words were selected: the last one, "${core}", is the one respelled.` : '';
+    const existing = sayTokenAt(text, coreEnd) || sayTokenAt(text, w.end);
+    if (existing) return { select: existing.body, note: `Type the new respelling for "${core}".` + several };
+    const insert = `[say: ${core}]`;
+    return { start: coreEnd, end: coreEnd, insert, select: [coreEnd + 6, coreEnd + 6 + core.length], note: `Type how "${core}" should be said.` + several };
+  }
+
+  /** Wrap the selection in [spell: …], the caret after it; with nothing selected, insert [spell: ] with the caret inside. */
+  function spellEdit(input, selStart, selEnd) {
+    const text = str(input);
+    let [s0, e0] = range(text, selStart, selEnd);
+    const sel = text.slice(s0, e0);
+    const inside = (pos) => [...text.matchAll(TOKEN)].some((m) => m.index < pos && pos < m.index + m[0].length);
+    if (inside(s0) || inside(e0)) return { note: 'Spell out cannot go inside another token.' };
+    // The whitespace around the selection, and punctuation glued to its end, stay outside the token
+    let a = s0 + sel.match(/^\s*/)[0].length, b = e0 - sel.match(/\s*$/)[0].length;
+    if (a < b) b -= text.slice(a, b).match(/[,.;:!?]*$/)[0].length;
+    if (a >= b) {
+      // Nothing, or only whitespace, selected: an empty token to type into, spaced like a pause.
+      // A selection that was only punctuation is kept; the token goes in front of it.
+      if (/\S/.test(sel)) s0 = e0 = a;
+      const trail = spaceAfter(text, e0);
+      const insert = spaceBefore(text, s0) + '[spell: ]' + trail;
+      const caret = s0 + insert.length - trail.length - 1;
+      return { start: s0, end: e0, insert, select: [caret, caret] };
+    }
+    const letters = text.slice(a, b);
+    if (/[\[\]\n]/.test(letters)) return { note: 'Spell out takes letters on one line, with no brackets.' };
+    const insert = `[spell: ${letters}]`;
+    return { start: a, end: b, insert, select: [a + insert.length, a + insert.length] };
+  }
+
+  /** The first `limit` characters, for a preview: cut at a word end and never inside a token. */
+  function previewSlice(input, limit) {
+    const text = str(input);
+    if (text.length <= limit) return text;
+    let cut = limit;
+    for (const m of text.matchAll(TOKEN)) {
+      if (m.index >= cut) break;
+      if (m.index + m[0].length > cut) { cut = m.index + m[0].length; break; } // finish the token
+    }
+    if (cut < text.length && /\S/.test(text[cut]) && /\S/.test(text[cut - 1])) {
+      // Back up to a word start, stepping over whole tokens so none is cut open
+      const spans = [...text.matchAll(TOKEN)].map((m) => [m.index, m.index + m[0].length]);
+      let i = cut;
+      while (i > 0 && /\S/.test(text[i - 1])) { const t = spans.find((sp) => sp[1] === i); i = t ? t[0] : i - 1; }
+      if (i > limit / 2) cut = i; // a whole word, unless that loses most of the preview
+    }
+    if (/[\uD800-\uDBFF]/.test(text[cut - 1] || '') && /[\uDC00-\uDFFF]/.test(text[cut] || '')) cut--; // keep an emoji whole
+    return text.slice(0, cut).replace(/\s+$/, '');
+  }
+
+  const api = {
+    parse, strip, lower, hasMarkup, providerOf, PAUSE_DEFAULT, PAUSE_MIN, PAUSE_MAX,
+    pauseToken, pauseEdit, sayEdit, spellEdit, previewSlice,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.danMarkup = api;
 })(typeof self !== 'undefined' ? self : this);

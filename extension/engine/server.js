@@ -16,7 +16,7 @@ export function serverFor(setting) {
   return String(setting).trim().replace(/\/+$/, '');
 }
 
-const LABELS = { elevenlabs: 'ElevenLabs' };
+const LABELS = { elevenlabs: 'ElevenLabs', azure: 'Azure' };
 export const providerLabel = (provider) => LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Server');
 
 /** The server's own explanation of a failure ({"detail": "..."}), else the status. */
@@ -33,7 +33,7 @@ async function reach(fetchImpl, base, path, init) {
     return await fetchImpl(`${base}${path}`, init);
   } catch (e) {
     const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError';
-    throw new Error(`${timedOut ? 'The voice server did not answer in time' : 'Could not reach the voice server'} (${hostOf(base)}). Pick an Edge voice, or check the server on the options page.`);
+    throw new Error(`${timedOut ? 'The voice server did not answer in time' : 'Could not reach the voice server'} (${hostOf(base)}). Pick an Edge voice, or check the voice server setting.`);
   }
 }
 

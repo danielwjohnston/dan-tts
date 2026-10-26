@@ -45,6 +45,17 @@ Two things that look right but are not. A **Build variable** (Settings → Build
 
 `/usage` reports the month's remaining credits (the tester shows them under the voice picker, and the health check logs them). Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
 
+## Voice providers: adding Azure AI Speech
+
+Azure's voices are the licensed version of the Edge voices: the same engine protocol, with a key instead of a spoofed browser. They appear as soon as the Worker has a key and a region; both stay on the server and are never sent to the browser.
+
+1. Azure portal → **Create a resource** → **Speech** (under Azure AI services). Pick a subscription, a resource group, a region (for example East US) and the **Free F0** pricing tier, which allows 500,000 characters of neural speech a month. Once it is deployed, open the resource's **Keys and Endpoint** page: copy **Key 1**, and note the **Location/Region** identifier shown there (`eastus`, not "East US").
+2. Cloudflare dashboard → Workers & Pages → **dan-tts** → **Settings** → **Variables and Secrets** → **Add**. Type **Secret**, name `AZURE_SPEECH_KEY`, paste the key as the value. **Add** again: type Secret, name `AZURE_SPEECH_REGION`, value the region identifier. **Deploy**. Both must be present; with only one of them the provider stays off.
+3. Branch previews do not inherit production settings: switch the toggle on the same section from **Production** to **Previews Base** and add both secrets there too, as described for ElevenLabs above.
+4. Check: `https://dan-tts.macdaddydwj.workers.dev/health` now lists `"azure"` among the providers, and the tester shows the region's English voices under "Azure voices", en-US first, each with a sample.
+
+Voice ids are `azure:<ShortName>`, for example `azure:en-US-JennyNeural`; the Worker lists the standard neural voices of every English locale (HD voices, whose names carry a colon and cost more, are left out). Samples are synthesized on first request (a few dozen characters each), never at startup, and cached like Edge samples. A wrong key or region answers 502 with a plain message, rate limiting 429, a timeout 504, and Edge voices keep working throughout. Azure has no usage endpoint, so `/usage` carries a note instead of a count: the running total is in the Azure portal (the resource's **Metrics**, or Cost Management). Locally, put both values in `worker/.dev.vars`.
+
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.
 - Load from URL can't reach sites that block automated access (it says so, with an "Open in browser" link), and pages built entirely in JavaScript give only their description. The browser extension reads such pages in place.

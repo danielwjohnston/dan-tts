@@ -1,25 +1,28 @@
 // dan-tts API on Cloudflare Workers. Mirrors the Python server's endpoints so the
 // tester (and anything else) can switch by changing the API base URL. Uses the shared
-// engine to talk to Microsoft's voice service directly, and ElevenLabs when the
-// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>").
+// engine to talk to Microsoft's voice service directly, ElevenLabs when the
+// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>"), and Azure AI Speech when
+// AZURE_SPEECH_KEY and AZURE_SPEECH_REGION are set (voices "azure:<name>").
 import { synthesize, connectionHeaders, listVoices } from '../../engine/src/tts.js';
 import { extractText, HttpError } from './extract.js';
 import * as eleven from './elevenlabs.js';
+import * as azure from './azure.js';
 
 const MAX_TEXT_CHARS = 20000;
-const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs
-const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice);
+const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs, "azure:<name>" is Azure
+const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice) || azure.ID_RE.test(voice);
 const SAMPLE_TEXT = 'This is a sample of the selected voice.';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { ...CORS, ...headers } });
 
 // Workers' outbound WebSocket: fetch() with Upgrade, then accept(). Wrapped in the
-// small browser-style interface the engine expects.
-async function openSocket(url) {
-  const resp = await fetch(url.replace('wss://', 'https://'), { headers: { Upgrade: 'websocket', ...connectionHeaders() } });
+// small browser-style interface the engine expects. Each provider gets its own headers
+// (Edge's browser headers, Azure's key) and its own words for a refused handshake.
+const socketOpener = (headers, refused) => async (url) => {
+  const resp = await fetch(url.replace('wss://', 'https://'), { headers: { Upgrade: 'websocket', ...headers() } });
   const ws = resp.webSocket;
-  if (!ws) throw new HttpError(502, `Voice service refused the connection (HTTP ${resp.status})`);
+  if (!ws) throw refused(resp.status);
   ws.binaryType = 'arraybuffer'; // the default here is Blob
   ws.accept();
   const sock = { readyState: 1, binaryType: 'arraybuffer', send: (d) => ws.send(d), close: () => ws.close() };
@@ -27,7 +30,9 @@ async function openSocket(url) {
   ws.addEventListener('close', (e) => sock.onclose?.(e));
   ws.addEventListener('error', (e) => sock.onerror?.(e));
   return sock;
-}
+};
+const openSocket = socketOpener(connectionHeaders, (status) => new HttpError(502, `Voice service refused the connection (HTTP ${status})`));
+const openAzureSocket = (env) => socketOpener(() => azure.headers(env.AZURE_SPEECH_KEY), azure.refused);
 
 const base64 = (bytes) => {
   let s = '';
@@ -48,11 +53,13 @@ async function readRequest(request) {
   return { text, voice, format };
 }
 
-// Route by provider: ElevenLabs ids carry a prefix, everything else is an Edge voice
+// Route by provider: ElevenLabs and Azure ids carry a prefix, everything else is an Edge voice
 const tts = (text, voice, env) => eleven.isElevenVoice(voice)
   ? eleven.synthesize(text, voice, { key: env.ELEVENLABS_API_KEY, model: env.ELEVENLABS_MODEL || eleven.DEFAULT_MODEL })
-  : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
-const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : [])];
+  : azure.isAzureVoice(voice)
+    ? azure.synthesize(text, voice, { key: env.AZURE_SPEECH_KEY, region: env.AZURE_SPEECH_REGION, openSocket: openAzureSocket(env) })
+    : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
+const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : []), ...(azure.configured(env) ? ['azure'] : [])];
 
 // ---- Captions (same format as the Python server) ----
 const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -97,20 +104,29 @@ async function route(request, env, ctx) {
       const voices = (await listVoices({ headers: connectionHeaders() }))
         .filter((v) => v.Locale === 'en-US')
         .map((v) => ({ name: v.Name, shortName: v.ShortName, locale: v.Locale, localeName: v.LocaleName, gender: v.Gender, styleList: v.StyleList || [], provider: 'edge', sampleUrl: `/samples/${v.ShortName}` }));
-      if (env.ELEVENLABS_API_KEY) {
-        // A failed ElevenLabs listing (bad key, outage) must not hide the Edge voices
-        try { voices.push(...await eleven.listVoices(env.ELEVENLABS_API_KEY)); }
-        catch (e) { console.error(`ElevenLabs voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
-      }
-      return json(voices);
+      // Provider listings run side by side. A failed one (bad key, outage) must not hide the other
+      // voices, and the shorter list is not cached.
+      const listings = [
+        ...(env.ELEVENLABS_API_KEY ? [['ElevenLabs', eleven.listVoices(env.ELEVENLABS_API_KEY)]] : []),
+        ...(azure.configured(env) ? [['Azure', azure.listVoices(env.AZURE_SPEECH_KEY, env.AZURE_SPEECH_REGION)]] : []),
+      ];
+      const results = await Promise.allSettled(listings.map(([, listing]) => listing));
+      let complete = true;
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') voices.push(...r.value);
+        else { console.error(`${listings[i][0]} voice list unavailable: ${r.reason?.message || r.reason}`); complete = false; }
+      });
+      return json(voices, 200, complete ? {} : { 'Cache-Control': 'no-store' });
     }, { variant: providers(env).join(',') });
   }
 
-  // What each provider costs right now. Edge has no quota; ElevenLabs reports this month's credits.
-  // A good answer is kept a minute, a failed lookup 15 seconds (same on the Python server).
+  // What each provider costs right now. Edge has no quota; ElevenLabs reports this month's credits;
+  // Azure has no usage endpoint, so its entry is a note. A good answer is kept a minute, a failed
+  // lookup 15 seconds (same on the Python server).
   if (request.method === 'GET' && path === '/usage') {
     return cached(request, ctx, 60, async () => {
       const out = { edge: { unlimited: true } };
+      if (azure.configured(env)) out.azure = { tracked: false, note: azure.USAGE_NOTE };
       if (!env.ELEVENLABS_API_KEY) return json(out);
       usageInFlight ||= eleven.usage(env.ELEVENLABS_API_KEY).finally(() => { usageInFlight = null; });
       try { out.elevenlabs = await usageInFlight; }
@@ -127,6 +143,8 @@ async function route(request, env, ctx) {
     const voice = decodeURIComponent(sample[1]);
     if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
     if (eleven.isElevenVoice(voice) && !env.ELEVENLABS_API_KEY) throw new HttpError(503, 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)');
+    if (azure.isAzureVoice(voice) && !azure.configured(env)) throw new HttpError(503, azure.NOT_CONFIGURED);
+    // Azure samples are synthesized like Edge ones (a few dozen characters of quota each, then cached)
     // variant "audio": samples cached before the content-type fix (text/plain previews) are not reused
     return cached(request, ctx, 7 * 86400, async () => {
       if (eleven.isElevenVoice(voice)) {

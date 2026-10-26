@@ -69,6 +69,13 @@
     .export-option:last-child { border-radius: 0 0 6px 6px; }
     .export-option:hover { background: var(--bg2); }
 
+    /* Markup toolbar (shown while the Markup tokens switch is on) */
+    .markup-tools { margin-top: 6px; }
+    .markup-tools[hidden] { display: none; }
+    .markup-tools .btn-row { margin-top: 0; }
+    .markup-tools .export-menu { min-width: 100px; }
+    .markup-tools .text-meta { margin-top: 4px; line-height: 1.4; }
+
     /* Player & log */
     audio { width: 100%; margin-top: 10px; }
     .log { margin-top: 6px; color: var(--fg2); font-size: 12px; min-height: 18px; }
@@ -150,9 +157,26 @@
         <textarea id="text">Hello world from Dan's TTS Project.</textarea>
         <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs voices get real pauses.">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge and Azure voices get punctuation for pauses; ElevenLabs voices get real pauses.">
         <input type="checkbox" id="markup" style="width:auto;margin:0;"> Markup tokens <span style="opacity:.8">([pause 800ms], word[say: respelling], [spell: ABC])</span>
       </label>
+      <div class="markup-tools" id="markup-tools" hidden>
+        <div class="btn-row">
+          <div class="export-dropdown">
+            <button type="button" class="btn btn-secondary" id="markup-pause" aria-expanded="false" title="Insert a pause at the caret">Pause &#9662;</button>
+            <div class="export-menu" id="markup-pause-menu" style="display:none;">
+              <button type="button" class="export-option" data-ms="400">400 ms</button>
+              <button type="button" class="export-option" data-ms="800">800 ms</button>
+              <button type="button" class="export-option" data-ms="1500">1.5 s</button>
+              <button type="button" class="export-option" data-ms="3000">3 s</button>
+            </div>
+          </div>
+          <button type="button" class="btn btn-secondary" id="markup-say" title="Say the selected word, or the word at the caret, another way">Respell</button>
+          <button type="button" class="btn btn-secondary" id="markup-spell" title="Read the selected letters one by one">Spell out</button>
+          <button type="button" class="btn btn-secondary" id="markup-preview" title="Hear the selection, or the first 300 characters, with the selected voice">Preview</button>
+        </div>
+        <div class="text-meta"><span><code>[pause 800ms]</code> pauses. <code>kernel[say: Ker-nel]</code> says the word another way. <code>[spell: ABC]</code> reads the letters one by one. Edge voices get punctuation for a pause; ElevenLabs voices get a real pause.</span></div>
+      </div>
       <div class="text-meta">
         <span id="text-count">6 words &middot; 35 chars</span>
         <span>Ctrl+Enter to synthesize</span>
@@ -441,20 +465,23 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
     // Edge voices have names like en-US-AriaNeural; provider voices carry their own display name
-    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices' };
+    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices', azure: 'Azure voices' };
     const providerOf = (v) => v.provider || 'edge';
     const displayName = (v) => providerOf(v) === 'edge' ? friendlyName(v.shortName) : (v.name || v.shortName);
     const voiceDetail = (v) => providerOf(v) === 'edge' ? (v.shortName || '') : [PROVIDER_LABELS[providerOf(v)] || providerOf(v), v.localeName].filter(Boolean).join(' · ');
     const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
-    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
+    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution).';
+    const AZURE_NOTE = 'Azure voices use that Speech resource\u2019s quota (free tier: 500,000 characters a month; usage is shown in the Azure portal, not here).';
+    // The note under the voice picker: one sentence per paid provider the server lists, then the Edge one
+    const providerNote = (elevenText) => [serverProviders.includes('elevenlabs') ? elevenText : '', serverProviders.includes('azure') ? AZURE_NOTE : '', 'Edge voices have no quota.'].filter(Boolean).join(' ');
     function showProviderNote() {
       const note = document.getElementById('provider-note');
-      const eleven = serverProviders.includes('elevenlabs');
-      note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
-      if (eleven) showUsage();
+      const paid = serverProviders.some((p) => p !== 'edge');
+      note.style.display = paid ? '' : 'none';
+      note.textContent = paid ? providerNote(GENERIC_ELEVEN_NOTE) : '';
+      if (serverProviders.includes('elevenlabs')) showUsage();
     }
     /* Live credit count from /usage, replacing the generic note when the server can report it */
     async function showUsage() {
@@ -467,8 +494,8 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const n = (x) => x.toLocaleString();
         const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
         const minutes = Math.round(u.remaining / 1000);
-        document.getElementById('provider-note').textContent =
-          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset} Edge voices have no quota.`;
+        document.getElementById('provider-note').textContent = providerNote(
+          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset}`);
       } catch (e) { /* the generic note stays */ }
     }
 
@@ -833,6 +860,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     
     exportBtn.onclick = (e) => {
       e.stopPropagation();
+      if (typeof closePauseMenu === 'function') closePauseMenu(); // one menu open at a time
       exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none';
     };
     
@@ -842,7 +870,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     
     exportMenu.onclick = (e) => e.stopPropagation();
     
-    document.querySelectorAll('.export-option').forEach(btn => {
+    exportMenu.querySelectorAll('.export-option').forEach(btn => {
       btn.onclick = async () => {
         const format = btn.dataset.format;
         exportMenu.style.display = 'none';
@@ -946,6 +974,79 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         }
       };
     });
+
+    /* ---- Markup toolbar: insert tokens at the caret, preview the selection (static/markup.js) ---- */
+    const markupTools = document.getElementById('markup-tools');
+    const pauseBtn = document.getElementById('markup-pause');
+    const pauseMenu = document.getElementById('markup-pause-menu');
+    const markupPreviewBtn = document.getElementById('markup-preview');
+    const showMarkupTools = () => { markupTools.hidden = !markupBox.checked; };
+    markupBox.addEventListener('change', showMarkupTools);
+    showMarkupTools();
+    // The caret is the end of the selection the user moved last
+    const caretPos = () => (textArea.selectionDirection === 'backward' ? textArea.selectionStart : textArea.selectionEnd);
+    // Applied as an editing command, so Ctrl+Z undoes it (setRangeText would wipe the undo history in
+    // Chromium); the fallback keeps the counter right with its own input event
+    function applyMarkupEdit(edit) {
+      if (edit.insert != null) {
+        textArea.focus();
+        textArea.setSelectionRange(edit.start, edit.end);
+        let done = false;
+        try { done = document.execCommand && document.execCommand('insertText', false, edit.insert); } catch (e) { done = false; }
+        if (!done || textArea.value.slice(edit.start, edit.start + edit.insert.length) !== edit.insert) {
+          textArea.setRangeText(edit.insert, edit.start, edit.end, 'preserve');
+          textArea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+      if (edit.select) textArea.setSelectionRange(edit.select[0], edit.select[1]);
+      textArea.focus();
+      if (edit.note) logEl.textContent = edit.note;
+    }
+    function closePauseMenu() { pauseMenu.style.display = 'none'; pauseBtn.setAttribute('aria-expanded', 'false'); }
+    // The menu closes when focus leaves it, and Escape works from the Pause button too
+    const pauseWrap = pauseBtn.parentElement;
+    pauseWrap.addEventListener('focusout', (e) => { if (!pauseWrap.contains(e.relatedTarget)) closePauseMenu(); });
+    pauseWrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pauseMenu.style.display !== 'none') { closePauseMenu(); pauseBtn.focus(); } });
+    pauseBtn.onclick = (e) => {
+      e.stopPropagation();
+      exportMenu.style.display = 'none';
+      if (pauseMenu.style.display !== 'none') { closePauseMenu(); return; }
+      pauseMenu.style.display = 'block';
+      pauseBtn.setAttribute('aria-expanded', 'true');
+      pauseMenu.querySelector('button').focus();
+    };
+    document.addEventListener('click', closePauseMenu);
+    pauseMenu.querySelectorAll('button').forEach((opt) => {
+      opt.onclick = () => { closePauseMenu(); applyMarkupEdit(danMarkup.pauseEdit(textArea.value, caretPos(), opt.dataset.ms)); };
+    });
+    document.getElementById('markup-say').onclick = () => applyMarkupEdit(danMarkup.sayEdit(textArea.value, textArea.selectionStart, textArea.selectionEnd));
+    document.getElementById('markup-spell').onclick = () => applyMarkupEdit(danMarkup.spellEdit(textArea.value, textArea.selectionStart, textArea.selectionEnd));
+    // Preview: the selection, or the start of the text, lowered for the voice and read the way
+    // Synthesize would read it (chunked, each paragraph of lowered text on its own)
+    markupPreviewBtn.onclick = async () => {
+      if (isSynthesizing) return; // one request at a time, like the other buttons
+      const voice = voiceSelect.value || 'en-US-AriaNeural';
+      const s = textArea.selectionStart, e = textArea.selectionEnd;
+      const raw = s !== e ? textArea.value.slice(s, e) : danMarkup.previewSlice(textArea.value, 300);
+      const text = textToSpeak(raw, voice);
+      if (!text.trim()) { logEl.textContent = 'Nothing to preview: type or select some text first.'; return; }
+      setLoading(true);
+      markupPreviewBtn.disabled = true;
+      logEl.textContent = 'Previewing...';
+      try {
+        const { blob } = await synthesizeText(text, voice, 'mp3', { separateParagraphs: markupBox.checked });
+        playerEl.src = URL.createObjectURL(blob);
+        playerEl.style.display = '';
+        await playerEl.play();
+        logEl.textContent = `Preview: ${raw.length} characters${s !== e ? ' (the selection)' : ''}, read by ${nameFor(voice)}.`;
+      } catch (err) {
+        console.error(err);
+        logEl.textContent = 'Error: ' + err.message;
+      } finally {
+        markupPreviewBtn.disabled = false;
+        setLoading(false);
+      }
+    };
 
     /* ---- Download ---- */
     downloadBtn.onclick = () => {
