@@ -234,3 +234,29 @@ test('previewSlice keeps whole words and whole tokens', () => {
   assert.strictEqual(previewSlice('x'.repeat(500), 300).length, 300);
   assert.strictEqual(previewSlice('ab ' + 'x'.repeat(500), 300).length, 300);
 });
+
+test('toolbar edits never split or detach a token, and keep what the user selected', () => {
+  const { pauseEdit, sayEdit, spellEdit, previewSlice } = require('../static/markup.js');
+  // Pause: a caret inside a token moves past it; a caret between a word and its [say:] goes after the token
+  let t = 'the kernel[say: Ker-nel] panicked.';
+  let e = pauseEdit(t, 18, 800);
+  assert.strictEqual(t.slice(0, e.start) + e.insert + t.slice(e.end), 'the kernel[say: Ker-nel] [pause 800ms] panicked.');
+  e = pauseEdit(t, 10, 800);
+  assert.strictEqual(t.slice(0, e.start) + e.insert + t.slice(e.end), 'the kernel[say: Ker-nel] [pause 800ms] panicked.');
+  // Spell out: a punctuation-only selection is kept; inside a token is refused
+  e = spellEdit('Wait... what?', 4, 7);
+  assert.strictEqual('Wait... what?'.slice(0, e.start) + e.insert + 'Wait... what?'.slice(e.end), 'Wait [spell: ]... what?'); // the dots stay
+  assert.match(spellEdit(t, 16, 19).note, /inside another token/);
+  // Respell: the last word with letters wins; combining accents stay with their letter
+  e = sayEdit('turn left \u2014 then wait', 0, 11);
+  assert.strictEqual(e.insert, '[say: left]');
+  e = sayEdit('un cafe\u0301 noir', 5, 5);
+  assert.strictEqual(e.insert, '[say: cafe\u0301]');
+  // Preview slice: a token glued to punctuation is never cut open; an emoji pair stays whole
+  const long = 'a'.repeat(290) + ' kernel[say: Ker-nel]. more';
+  assert.ok(!/\[say: ?$|\[say$/.test(previewSlice(long, 300)) && previewSlice(long, 300).length <= 311);
+  assert.ok(!previewSlice(long, 300).includes('[say: Ker') || previewSlice(long, 300).includes('[say: Ker-nel]'));
+  const emoji = 'a' + '\u{1F600}'.repeat(200);
+  const cut = previewSlice(emoji, 300);
+  assert.ok(!/[\uD800-\uDBFF]$/.test(cut));
+});

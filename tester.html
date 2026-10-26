@@ -163,7 +163,7 @@
       <div class="markup-tools" id="markup-tools" hidden>
         <div class="btn-row">
           <div class="export-dropdown">
-            <button type="button" class="btn btn-secondary" id="markup-pause" aria-haspopup="menu" aria-expanded="false" title="Insert a pause at the caret">Pause &#9662;</button>
+            <button type="button" class="btn btn-secondary" id="markup-pause" aria-expanded="false" title="Insert a pause at the caret">Pause &#9662;</button>
             <div class="export-menu" id="markup-pause-menu" style="display:none;">
               <button type="button" class="export-option" data-ms="400">400 ms</button>
               <button type="button" class="export-option" data-ms="800">800 ms</button>
@@ -173,7 +173,7 @@
           </div>
           <button type="button" class="btn btn-secondary" id="markup-say" title="Say the selected word, or the word at the caret, another way">Respell</button>
           <button type="button" class="btn btn-secondary" id="markup-spell" title="Read the selected letters one by one">Spell out</button>
-          <button type="button" class="btn btn-secondary" id="markup-preview" title="Hear the selection, or the first 300 characters, with the voice above">Preview</button>
+          <button type="button" class="btn btn-secondary" id="markup-preview" title="Hear the selection, or the first 300 characters, with the selected voice">Preview</button>
         </div>
         <div class="text-meta"><span><code>[pause 800ms]</code> pauses. <code>kernel[say: Ker-nel]</code> says the word another way. <code>[spell: ABC]</code> reads the letters one by one. Edge voices get punctuation for a pause; ElevenLabs voices get a real pause.</span></div>
       </div>
@@ -860,6 +860,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     
     exportBtn.onclick = (e) => {
       e.stopPropagation();
+      if (typeof closePauseMenu === 'function') closePauseMenu(); // one menu open at a time
       exportMenu.style.display = exportMenu.style.display === 'none' ? 'block' : 'none';
     };
     
@@ -984,17 +985,28 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     showMarkupTools();
     // The caret is the end of the selection the user moved last
     const caretPos = () => (textArea.selectionDirection === 'backward' ? textArea.selectionStart : textArea.selectionEnd);
-    // setRangeText keeps the undo history; the input event keeps the counter right
+    // Applied as an editing command, so Ctrl+Z undoes it (setRangeText would wipe the undo history in
+    // Chromium); the fallback keeps the counter right with its own input event
     function applyMarkupEdit(edit) {
       if (edit.insert != null) {
-        textArea.setRangeText(edit.insert, edit.start, edit.end, 'preserve');
-        textArea.dispatchEvent(new Event('input', { bubbles: true }));
+        textArea.focus();
+        textArea.setSelectionRange(edit.start, edit.end);
+        let done = false;
+        try { done = document.execCommand && document.execCommand('insertText', false, edit.insert); } catch (e) { done = false; }
+        if (!done || textArea.value.slice(edit.start, edit.start + edit.insert.length) !== edit.insert) {
+          textArea.setRangeText(edit.insert, edit.start, edit.end, 'preserve');
+          textArea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
       }
       if (edit.select) textArea.setSelectionRange(edit.select[0], edit.select[1]);
       textArea.focus();
       if (edit.note) logEl.textContent = edit.note;
     }
-    const closePauseMenu = () => { pauseMenu.style.display = 'none'; pauseBtn.setAttribute('aria-expanded', 'false'); };
+    function closePauseMenu() { pauseMenu.style.display = 'none'; pauseBtn.setAttribute('aria-expanded', 'false'); }
+    // The menu closes when focus leaves it, and Escape works from the Pause button too
+    const pauseWrap = pauseBtn.parentElement;
+    pauseWrap.addEventListener('focusout', (e) => { if (!pauseWrap.contains(e.relatedTarget)) closePauseMenu(); });
+    pauseWrap.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pauseMenu.style.display !== 'none') { closePauseMenu(); pauseBtn.focus(); } });
     pauseBtn.onclick = (e) => {
       e.stopPropagation();
       exportMenu.style.display = 'none';
@@ -1003,29 +1015,30 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       pauseBtn.setAttribute('aria-expanded', 'true');
       pauseMenu.querySelector('button').focus();
     };
-    pauseMenu.onkeydown = (e) => { if (e.key === 'Escape') { closePauseMenu(); pauseBtn.focus(); } };
     document.addEventListener('click', closePauseMenu);
     pauseMenu.querySelectorAll('button').forEach((opt) => {
       opt.onclick = () => { closePauseMenu(); applyMarkupEdit(danMarkup.pauseEdit(textArea.value, caretPos(), opt.dataset.ms)); };
     });
     document.getElementById('markup-say').onclick = () => applyMarkupEdit(danMarkup.sayEdit(textArea.value, textArea.selectionStart, textArea.selectionEnd));
     document.getElementById('markup-spell').onclick = () => applyMarkupEdit(danMarkup.spellEdit(textArea.value, textArea.selectionStart, textArea.selectionEnd));
-    // Preview: the selection, or the start of the text, lowered for the voice and read as one MP3
+    // Preview: the selection, or the start of the text, lowered for the voice and read the way
+    // Synthesize would read it (chunked, each paragraph of lowered text on its own)
     markupPreviewBtn.onclick = async () => {
       if (isSynthesizing) return; // one request at a time, like the other buttons
       const voice = voiceSelect.value || 'en-US-AriaNeural';
       const s = textArea.selectionStart, e = textArea.selectionEnd;
-      const text = textToSpeak(s !== e ? textArea.value.slice(s, e) : danMarkup.previewSlice(textArea.value, 300), voice);
+      const raw = s !== e ? textArea.value.slice(s, e) : danMarkup.previewSlice(textArea.value, 300);
+      const text = textToSpeak(raw, voice);
       if (!text.trim()) { logEl.textContent = 'Nothing to preview: type or select some text first.'; return; }
       setLoading(true);
       markupPreviewBtn.disabled = true;
       logEl.textContent = 'Previewing...';
       try {
-        const blob = await doSynthesize(text, voice, 'mp3');
+        const { blob } = await synthesizeText(text, voice, 'mp3', { separateParagraphs: markupBox.checked });
         playerEl.src = URL.createObjectURL(blob);
         playerEl.style.display = '';
         await playerEl.play();
-        logEl.textContent = `Preview: ${text.length} characters${s !== e ? ' (the selection)' : ''}, read by ${nameFor(voice)}.`;
+        logEl.textContent = `Preview: ${raw.length} characters${s !== e ? ' (the selection)' : ''}, read by ${nameFor(voice)}.`;
       } catch (err) {
         console.error(err);
         logEl.textContent = 'Error: ' + err.message;

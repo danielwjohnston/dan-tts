@@ -411,14 +411,19 @@ def _azure_ssml(text: str, voice: str) -> str:
             f"<voice name='{voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>{body}</prosody></voice></speak>")
 
 
-def _azure_messages(ssml: str) -> tuple[str, str]:
-    """The two text frames that start a turn: speech.config (MP3 out, word boundaries on) and the SSML."""
+def _azure_messages(ssml: str) -> tuple[str, str, str]:
+    """The three text frames that start a turn: speech.config, synthesis.context (the output format and
+    word boundaries, where Azure's own SDK puts them) and the SSML. Same frames as the Worker's engine."""
     stamp = time.strftime("%a %b %d %Y %H:%M:%S GMT+0000 (Coordinated Universal Time)", time.gmtime())
+    req_id = uuid.uuid4().hex
     config = (f"X-Timestamp:{stamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n"
               '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},'
               '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n')
-    request = f"X-RequestId:{uuid.uuid4().hex}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{stamp}Z\r\nPath:ssml\r\n\r\n{ssml}"
-    return config, request
+    context = (f"X-RequestId:{req_id}\r\nContent-Type:application/json\r\nX-Timestamp:{stamp}Z\r\nPath:synthesis.context\r\n\r\n"
+               '{"synthesis":{"audio":{"metadataOptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true,"punctuationBoundaryEnabled":false,"sessionEndEnabled":false},'
+               '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}')
+    request = f"X-RequestId:{req_id}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{stamp}Z\r\nPath:ssml\r\n\r\n{ssml}"
+    return config, context, request
 
 
 def _ws_headers(head: str) -> dict:
@@ -455,14 +460,22 @@ async def _azure_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
         raise HTTPException(status_code=503, detail=AZURE_NOT_CONFIGURED)
     # Azure wants a connection id (a GUID without dashes) and no Edge token
     url = f"wss://{_azure_host()}/cognitiveservices/websocket/v1?X-ConnectionId={uuid.uuid4().hex}"
-    config, request = _azure_messages(_azure_ssml(text, voice[len(AZURE_PREFIX):]))
+    config, context, request = _azure_messages(_azure_ssml(text, voice[len(AZURE_PREFIX):]))
     audio = bytearray()
     boundaries: list[dict] = []
+    ended = False
     try:
         async with _azure_open_socket(url) as ws:
             await ws.send_str(config)
+            await ws.send_str(context)
             await ws.send_str(request)
-            async for msg in ws:
+            while True:
+                msg = await ws.receive()
+                if msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.CLOSED):
+                    # The service hung up before the turn ended: say so, with its reason, like the Worker does
+                    code = msg.data if msg.type == aiohttp.WSMsgType.CLOSE else ws.close_code
+                    reason = (msg.extra or "") if msg.type == aiohttp.WSMsgType.CLOSE else ""
+                    raise HTTPException(status_code=502, detail=f"Azure error: Closed ({code}) {reason}".rstrip())
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     headers, body = _ws_text_frame(msg.data)
                     path = headers.get("Path")
@@ -474,6 +487,7 @@ async def _azure_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
                                 boundaries.append({"offset": data["Offset"], "duration": data["Duration"],
                                                    "text": unescape(data["text"]["Text"], {"&quot;": '"', "&apos;": "'"})})
                     elif path == "turn.end":
+                        ended = True
                         break
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     headers, data = _ws_binary_frame(msg.data)
@@ -487,9 +501,9 @@ async def _azure_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
         raise HTTPException(status_code=502, detail=f"Azure error: {exc}")
     except (asyncio.TimeoutError, TimeoutError):
         raise HTTPException(status_code=504, detail="Azure timed out")
-    except (ValueError, KeyError, TypeError) as exc:  # a frame we cannot read
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:  # a frame we cannot read
         raise HTTPException(status_code=502, detail=f"Azure returned an unreadable response ({type(exc).__name__})")
-    if not audio:
+    if not ended or not audio:
         raise HTTPException(status_code=502, detail="Azure error: No audio received")
     return bytes(audio), boundaries
 
@@ -644,6 +658,10 @@ async def pre_render_samples():
     try:
         voices = await list_voices()
         for v in voices:
+            # Only Edge samples are rendered ahead of time: a provider's sample costs quota or credits, so
+            # it is made on the first request instead (ElevenLabs serves its free preview clip)
+            if v.get("provider", "edge") != "edge":
+                continue
             try:
                 await ensure_sample(v["shortName"])
             except Exception:

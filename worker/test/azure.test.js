@@ -18,7 +18,7 @@ const textFrame = (path, body) => `X-RequestId:abc\r\nContent-Type:application/j
 const meta = (text, offset, duration, boundaryType = 'WordBoundary') => textFrame('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: offset, Duration: duration, text: { Text: text, Length: text.length, BoundaryType: boundaryType } } }] }));
 function fakeSocket(script) {
   return (url) => {
-    const ws = { readyState: 1, sent: [], url, send(d) { this.sent.push(d); if (this.sent.length === 2) queueMicrotask(() => script.forEach((f) => this.onmessage({ data: f }))); }, close() {} };
+    const ws = { readyState: 1, sent: [], url, send(d) { this.sent.push(d); if (this.sent.length === 3) queueMicrotask(() => script.forEach((f) => this.onmessage({ data: f }))); }, close() {} };
     fakeSocket.last = ws;
     return ws;
   };
@@ -115,9 +115,10 @@ test('synthesize speaks through the engine on the Azure URL and returns audio pl
   assert.deepStrictEqual([...audio], [1, 2, 3, 4]);
   assert.deepStrictEqual(boundaries, [{ offset: 1000000, duration: 4000000, text: 'Hello' }, { offset: 5500000, duration: 4000000, text: 'world' }]);
   assert.match(fakeSocket.last.url, /^wss:\/\/eastus\.tts\.speech\.microsoft\.com\/cognitiveservices\/websocket\/v1\?X-ConnectionId=[0-9a-f]{32}$/);
-  const [config, ssml] = fakeSocket.last.sent;
+  const [config, context, ssml] = fakeSocket.last.sent;
   assert.match(config, /Path:speech\.config/);
   assert.match(config, /audio-24khz-48kbitrate-mono-mp3/);
+  assert.match(context, /Path:synthesis\.context/); // where Azure's own SDK puts the format and boundary options
   assert.match(ssml, /<voice name='en-US-JennyNeural'>/); // the prefix is ours, not Azure's
   assert.match(ssml, /Hello, world/);
 });

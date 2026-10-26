@@ -217,7 +217,7 @@ MP3 request to `/synthesize`, in the page's player; one request at a time, "Prev
 in the log line, errors shown like the other buttons. The "Preview voice" button (a fixed sentence) is unchanged. The
 edits are pure functions in `static/markup.js` (`pauseEdit`, `sayEdit`, `spellEdit`, `previewSlice`, `pauseToken`),
 each returning the range to replace and the selection to set, tested in `tests/markup.test.js`; the tester applies them
-with `setRangeText`, so undo works, fires an input event so the counter follows, and refocuses the text box. The buttons
+as an editing command (so Ctrl+Z undoes them; a plain `setRangeText` would wipe Chromium's undo history), fires an input event so the counter follows, and refocuses the text box. Respell refuses when there is no word under the caret or in the selection; Spell out refuses brackets, newlines and a place inside another token; Pause moves out of a token it would otherwise split. The buttons
 are plain `<button type="button">` elements: Tab and Enter work, Escape closes the pause menu. A one-line help under the
 toolbar says what the three tokens do and that Edge voices get punctuation for a pause while ElevenLabs voices get a
 real one. Nothing new is stored: the switch's own setting shows or hides the toolbar.

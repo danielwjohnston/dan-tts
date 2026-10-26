@@ -108,7 +108,7 @@ GNU General Public License v3.0 or later (see `LICENSE`). This lets the project 
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest -q
-node --test tests/chunk-text.test.js tests/bundle.test.js   # chunker, zip/SRT
+node --test tests/chunk-text.test.js tests/bundle.test.js tests/markup.test.js   # chunker, zip/SRT, markup tokens
 node --test worker/test/*.test.js                           # Cloudflare Worker routes and Load from URL
 ```
 

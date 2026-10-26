@@ -14,7 +14,10 @@ const textFrame = (path, body) => `X-RequestId:abc\r\nContent-Type:application/j
 
 function fakeSocket(script, { open = false } = {}) {
   return (url) => {
-    const ws = { readyState: open ? 1 : 0, sent: [], url, send(d) { this.sent.push(d); if (this.sent.length === 2) queueMicrotask(() => script.forEach((f) => this.onmessage({ data: f }))); }, close() {} };
+    // Edge opens with two frames, Azure (any other URL) with three; the script plays once they are in.
+    // A { close: { code, reason } } entry plays the server closing the socket.
+    const opening = /speech\.platform\.bing\.com/.test(url) ? 2 : 3;
+    const ws = { readyState: open ? 1 : 0, sent: [], url, send(d) { this.sent.push(d); if (this.sent.length === opening) queueMicrotask(() => script.forEach((f) => (f && f.close ? this.onclose(f.close) : this.onmessage({ data: f })))); }, close() {} };
     fakeSocket.last = ws;
     // Real sockets fire "open" on a later task, never synchronously
     if (!open) setTimeout(() => { ws.readyState = 1; ws.onopen(); }, 0);
@@ -75,9 +78,28 @@ test('connectionUrl replaces the Edge URL and gets no Sec-MS-GEC token', async (
   const r = await synthesize('Hello', { voice: 'en-US-JennyNeural', openSocket: fakeSocket(script, { open: true }), connectionUrl: AZURE_URL });
   assert.strictEqual(fakeSocket.last.url, AZURE_URL);
   assert.ok(!/Sec-MS-GEC|TrustedClientToken/.test(fakeSocket.last.url));
-  assert.match(fakeSocket.last.sent[1], /<voice name='en-US-JennyNeural'>/);
+  // Azure gets the SDK's synthesis.context frame between speech.config and the SSML, sharing the request id
+  const [config, context, ssml] = fakeSocket.last.sent;
+  assert.strictEqual(fakeSocket.last.sent.length, 3);
+  assert.match(config, /Path:speech\.config/);
+  assert.match(context, /Path:synthesis\.context/);
+  assert.match(context, /"wordBoundaryEnabled":true/);
+  assert.match(context, /audio-24khz-48kbitrate-mono-mp3/);
+  assert.strictEqual(context.match(/X-RequestId:([0-9a-f]{32})/)[1], ssml.match(/X-RequestId:([0-9a-f]{32})/)[1]);
+  assert.match(ssml, /<voice name='en-US-JennyNeural'>/);
   assert.deepStrictEqual(Array.from(r.audio), [7]);
   assert.deepStrictEqual(r.boundaries, [{ offset: 1000000, duration: 4000000, text: 'Hello' }]);
+});
+
+test('Edge still sends exactly two frames (speech.config and the SSML)', async () => {
+  await synthesize('Hello', { openSocket: fakeSocket([binaryFrame('audio', new Uint8Array([1])), textFrame('turn.end', '{}')]) });
+  assert.strictEqual(fakeSocket.last.sent.length, 2);
+  assert.ok(!fakeSocket.last.sent.some((f) => /synthesis\.context/.test(f)));
+});
+
+test('an abnormal close after some audio fails at once on Azure, with the service\'s reason', async () => {
+  const script = [binaryFrame('audio', new Uint8Array([1])), { close: { code: 1011, reason: 'Quota exceeded' } }];
+  await assert.rejects(synthesize('Hello', { voice: 'en-US-JennyNeural', openSocket: fakeSocket(script, { open: true }), connectionUrl: AZURE_URL, timeoutMs: 2000 }), { message: /Closed \(1011\) Quota exceeded/ });
 });
 
 test('punctuation boundaries (Azure) are skipped; Edge-style entries without a type are kept', async () => {

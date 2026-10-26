@@ -93,13 +93,23 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
     const fail = (err) => { if (settled) return; settled = true; clearTimeout(timer); try { ws.close(); } catch {} reject(err); };
 
     const start = () => {
+      const reqId = hex32();
       ws.send(
         `X-Timestamp:${jsDate()}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
         '{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},' +
         '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n'
       );
+      // Azure's own SDK puts the output format and boundary options in a synthesis.context frame;
+      // Edge takes them from speech.config, so Edge's exchange stays exactly as it was
+      if (wsUrl) {
+        ws.send(
+          `X-RequestId:${reqId}\r\nContent-Type:application/json\r\nX-Timestamp:${jsDate()}Z\r\nPath:synthesis.context\r\n\r\n` +
+          '{"synthesis":{"audio":{"metadataOptions":{"sentenceBoundaryEnabled":false,"wordBoundaryEnabled":true,"punctuationBoundaryEnabled":false,"sessionEndEnabled":false},' +
+          '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}'
+        );
+      }
       ws.send(
-        `X-RequestId:${hex32()}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${jsDate()}Z\r\nPath:ssml\r\n\r\n${ssml}`
+        `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${jsDate()}Z\r\nPath:ssml\r\n\r\n${ssml}`
       );
     };
     // Sockets from some platforms (e.g. Cloudflare Workers) arrive already open
@@ -131,7 +141,9 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
       }
     };
     ws.onerror = (ev) => fail(new Error(`WebSocket error: ${ev?.message || ev?.error?.message || 'connection failed'}`));
-    ws.onclose = (ev) => { if (ev && ev.code !== 1000 && ev.code !== 1005 && !size) fail(new Error(`Closed (${ev.code}) ${ev.reason || ''}`)); };
+    // An abnormal close before turn.end is a failure. Edge keeps its old leniency once audio has
+    // arrived; Azure closes mid-turn with a reason (quota, bad SSML), which is worth reporting at once
+    ws.onclose = (ev) => { if (ev && ev.code !== 1000 && ev.code !== 1005 && (!size || wsUrl)) fail(new Error(`Closed (${ev.code}) ${ev.reason || ''}`)); };
   }));
 }
 

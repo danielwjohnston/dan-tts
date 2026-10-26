@@ -589,7 +589,10 @@ def _meta(text: str, offset: int, duration: int, boundary_type="WordBoundary") -
 
 
 class FakeSocket:
-    """Plays a script of frames back once both opening messages have been sent, as the service would."""
+    """Plays a script of frames back once the three opening messages have been sent, as the service would;
+    when the script runs out it closes normally (code 1000) without a turn.end."""
+
+    close_code = None
 
     def __init__(self, script):
         self.script, self.sent = list(script), []
@@ -597,12 +600,9 @@ class FakeSocket:
     async def send_str(self, data):
         self.sent.append(data)
 
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if len(self.sent) < 2 or not self.script:
-            raise StopAsyncIteration
+    async def receive(self):
+        if len(self.sent) < 3 or not self.script:
+            return aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1000, "")
         frame = self.script.pop(0)
         if isinstance(frame, aiohttp.WSMessage):
             return frame
@@ -669,9 +669,12 @@ def test_azure_synthesize_speaks_the_edge_protocol_with_a_key(monkeypatch):
     assert audio == b"\x01\x02\x03\x04"
     assert boundaries == [{"offset": 1_000_000, "duration": 4_000_000, "text": "Hello"}, {"offset": 5_500_000, "duration": 4_000_000, "text": "&world"}]
     assert re.fullmatch(r"wss://eastus\.tts\.speech\.microsoft\.com/cognitiveservices/websocket/v1\?X-ConnectionId=[0-9a-f]{32}", seen["url"])
-    config, ssml = seen["socket"].sent
+    config, context, ssml = seen["socket"].sent
     assert "Path:speech.config" in config and '"wordBoundaryEnabled":"true"' in config and "audio-24khz-48kbitrate-mono-mp3" in config
+    assert "Path:synthesis.context" in context and '"wordBoundaryEnabled":true' in context and "audio-24khz-48kbitrate-mono-mp3" in context
+    assert re.search(r"X-RequestId:([0-9a-f]{32})", context).group(1) == re.search(r"X-RequestId:([0-9a-f]{32})", ssml).group(1)
     assert "Path:ssml" in ssml and "Content-Type:application/ssml+xml" in ssml
+    assert main._azure_headers() == {"Ocp-Apim-Subscription-Key": "secret"}  # the key goes in this header, nowhere else
     assert "<voice name='en-US-JennyNeural'>" in ssml  # the prefix is ours, not Azure's
     assert "Hello, &amp; &quot;world&quot; </prosody>" in ssml  # escaped, control character replaced
 
@@ -723,6 +726,19 @@ def test_azure_synthesize_maps_failures_like_the_worker(monkeypatch):
     _fake_socket(monkeypatch, [_text_frame("audio.metadata", "not json")])
     exc = run()
     assert exc.status_code == 502 and "unreadable" in exc.detail
+    _fake_socket(monkeypatch, [_text_frame("audio.metadata", "null")])
+    exc = run()
+    assert exc.status_code == 502 and "unreadable" in exc.detail
+    _fake_socket(monkeypatch, [_text_frame("audio.metadata", json.dumps({"Metadata": [None]}))])
+    exc = run()
+    assert exc.status_code == 502 and "unreadable" in exc.detail
+    # The service hangs up before turn.end: never a clipped 200, and its reason is passed on
+    _fake_socket(monkeypatch, [_binary_frame("audio", b"\x01"), aiohttp.WSMessage(aiohttp.WSMsgType.CLOSE, 1011, "Quota exceeded")])
+    exc = run()
+    assert exc.status_code == 502 and "Closed (1011) Quota exceeded" in exc.detail
+    _fake_socket(monkeypatch, [_binary_frame("audio", b"\x01")])  # script ends: a normal close with no turn.end
+    exc = run()
+    assert exc.status_code == 502 and "Closed (1000)" in exc.detail
 
 
 def test_azure_voices_route_by_prefix(monkeypatch):
@@ -846,3 +862,18 @@ def test_usage_carries_the_azure_note_when_configured(client, monkeypatch):
         "edge": {"unlimited": True},
         "azure": {"tracked": False, "note": "Azure reports usage in its portal; the free tier is 500,000 characters a month"},
     }
+
+
+def test_startup_pre_render_skips_provider_voices(monkeypatch):
+    rendered = []
+
+    async def fake_voices():
+        return [{"shortName": "en-US-AriaNeural", "provider": "edge"}, {"shortName": "eleven:aaaaaaaaaaaa", "provider": "elevenlabs"}, {"shortName": "azure:en-US-JennyNeural", "provider": "azure"}]
+
+    async def fake_ensure(voice):
+        rendered.append(voice)
+
+    monkeypatch.setattr(main, "list_voices", fake_voices)
+    monkeypatch.setattr(main, "ensure_sample", fake_ensure)
+    asyncio.run(main.pre_render_samples())
+    assert rendered == ["en-US-AriaNeural"]  # provider samples cost quota or credits: made on first request

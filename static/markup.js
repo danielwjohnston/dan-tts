@@ -123,7 +123,7 @@
   /* ---- Toolbar edits (the tester's insert buttons) ----
      Each returns {start, end, insert, select, note}: replace text[start, end) with insert, then select
      [s, e] in the new text. insert is missing when only the selection moves; note is a line for the
-     user. The tester applies them with setRangeText, so the textarea keeps its undo history. */
+     user. The tester applies them as an editing command, so Ctrl+Z undoes them. */
   const clampPos = (text, pos) => Math.min(Math.max(0, Math.floor(Number(pos) || 0)), text.length);
   const range = (text, s, e) => { s = clampPos(text, s); e = clampPos(text, e); return s <= e ? [s, e] : [e, s]; };
   // A word as the toolbar sees it: no whitespace and no brackets, so a token next to a word is not part of it
@@ -139,10 +139,16 @@
     return `[pause ${ms < 1000 ? `${ms}ms` : `${ms / 1000}s`}]`;
   }
 
-  /** Insert a pause at the caret, spaced from the words around it; the caret lands after it. */
+  /** Insert a pause at the caret, spaced from the words around it; the caret lands after it.
+      A caret inside a token, or right before a word's [say: …], moves past the token first. */
   function pauseEdit(input, caret, ms) {
     const text = str(input);
-    const at = clampPos(text, caret);
+    let at = clampPos(text, caret);
+    for (const m of text.matchAll(TOKEN)) {
+      const end = m.index + m[0].length;
+      if (m.index > at) break;
+      if ((m.index < at && at < end) || (m.index === at && /^\[say/i.test(m[0]))) { at = end; break; }
+    }
     const insert = spaceBefore(text, at) + pauseToken(ms) + spaceAfter(text, at);
     return { start: at, end: at, insert, select: [at + insert.length, at + insert.length] };
   }
@@ -180,10 +186,14 @@
       const t = insideToken(a);
       return t && t.say ? { select: sayTokenAt(text, t.start).body, note: 'Type the new respelling.' } : noWord;
     }
-    const w = runAround(text, runs[runs.length - 1].start);
-    const word = text.slice(w.start, w.end);
-    const lead = word.match(/^[^\p{L}\p{N}]*/u)[0]; // an opening quote stays outside
-    const core = word.slice(lead.length).replace(/[^\p{L}\p{N}]+$/u, ''); // so does glued punctuation
+    // The last selected run that has letters in it (a trailing dash or ellipsis is not a word)
+    let w, word, lead, core = '';
+    for (let k = runs.length - 1; k >= 0 && !core; k--) {
+      w = runAround(text, runs[k].start);
+      word = text.slice(w.start, w.end);
+      lead = word.match(/^[^\p{L}\p{M}\p{N}]*/u)[0]; // an opening quote stays outside
+      core = word.slice(lead.length).replace(/[^\p{L}\p{M}\p{N}]+$/u, ''); // so does glued punctuation
+    }
     if (!core) return noWord;
     const coreEnd = w.start + lead.length + core.length;
     const several = runs.length > 1 ? ` Several words were selected: the last one, "${core}", is the one respelled.` : '';
@@ -196,13 +206,17 @@
   /** Wrap the selection in [spell: …], the caret after it; with nothing selected, insert [spell: ] with the caret inside. */
   function spellEdit(input, selStart, selEnd) {
     const text = str(input);
-    const [s0, e0] = range(text, selStart, selEnd);
+    let [s0, e0] = range(text, selStart, selEnd);
     const sel = text.slice(s0, e0);
+    const inside = (pos) => [...text.matchAll(TOKEN)].some((m) => m.index < pos && pos < m.index + m[0].length);
+    if (inside(s0) || inside(e0)) return { note: 'Spell out cannot go inside another token.' };
     // The whitespace around the selection, and punctuation glued to its end, stay outside the token
     let a = s0 + sel.match(/^\s*/)[0].length, b = e0 - sel.match(/\s*$/)[0].length;
     if (a < b) b -= text.slice(a, b).match(/[,.;:!?]*$/)[0].length;
     if (a >= b) {
-      // Nothing, or only whitespace, selected: an empty token to type into, spaced like a pause
+      // Nothing, or only whitespace, selected: an empty token to type into, spaced like a pause.
+      // A selection that was only punctuation is kept; the token goes in front of it.
+      if (/\S/.test(sel)) s0 = e0 = a;
       const trail = spaceAfter(text, e0);
       const insert = spaceBefore(text, s0) + '[spell: ]' + trail;
       const caret = s0 + insert.length - trail.length - 1;
@@ -224,10 +238,13 @@
       if (m.index + m[0].length > cut) { cut = m.index + m[0].length; break; } // finish the token
     }
     if (cut < text.length && /\S/.test(text[cut]) && /\S/.test(text[cut - 1])) {
+      // Back up to a word start, stepping over whole tokens so none is cut open
+      const spans = [...text.matchAll(TOKEN)].map((m) => [m.index, m.index + m[0].length]);
       let i = cut;
-      while (i > 0 && /\S/.test(text[i - 1])) i--;
+      while (i > 0 && /\S/.test(text[i - 1])) { const t = spans.find((sp) => sp[1] === i); i = t ? t[0] : i - 1; }
       if (i > limit / 2) cut = i; // a whole word, unless that loses most of the preview
     }
+    if (/[\uD800-\uDBFF]/.test(text[cut - 1] || '') && /[\uDC00-\uDFFF]/.test(text[cut] || '')) cut--; // keep an emoji whole
     return text.slice(0, cut).replace(/\s+$/, '');
   }
 
