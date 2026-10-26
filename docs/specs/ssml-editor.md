@@ -212,8 +212,10 @@ boundaries), as §6.5 says.
 typing replaces it; with several words selected the last one is used and the log line says so; on a word that already
 has a respelling, that respelling is selected instead. **Spell out** wraps the selection in `[spell: …]` (surrounding
 whitespace and glued punctuation stay outside), or inserts `[spell: ]` with the caret inside. **Preview** reads the
-selection, or the first 300 characters (cut at a word end, never inside a token), lowered for the chosen voice, as one
-MP3 request to `/synthesize`, in the page's player; one request at a time, "Previewing..." then "Preview: N characters"
+selection, or the first 300 characters (cut at a word end when one falls in the second half, never inside a token or an
+emoji; a single word longer than that is cut inside), read exactly as Synthesize would read it: lowered for the chosen
+voice, chunked, and with each paragraph of lowered text sent on its own so a long Edge pause previews as the pause it
+is, played in the page's player; one request at a time, "Previewing..." then "Preview: N characters"
 in the log line, errors shown like the other buttons. The "Preview voice" button (a fixed sentence) is unchanged. The
 edits are pure functions in `static/markup.js` (`pauseEdit`, `sayEdit`, `spellEdit`, `previewSlice`, `pauseToken`),
 each returning the range to replace and the selection to set, tested in `tests/markup.test.js`; the tester applies them
