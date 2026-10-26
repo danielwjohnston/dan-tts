@@ -47,7 +47,7 @@ See [`docs/plan.md`](docs/plan.md) for the October 2026 plan: licensed voice pro
 - **Offline voice (research)** — Done: `docs/spikes/offline-voice.md` compares on-device engines for word-timed, offline reading in the extension and the app; Piper first, Kokoro second. Building it waits on two owner decisions: the project licence and the voice
 - **Markup tokens (SSML editor, phase 1)** — Done: `static/markup.js` turns `[pause 800ms]`, `word[say: respelling]` and `[spell: ABC]` into what each provider understands (punctuation for Edge, `<break>` tags for ElevenLabs); the tester's "Markup tokens" switch applies it. Toolbar and extension support next (`docs/specs/ssml-editor.md`)
 - **Server voices in the extension and desktop app** — Done: provider voices (ElevenLabs) from the voice server sit in the reader's voice picker under their provider; Edge voices stay direct. Options page sets the server
-- **Voice provider seam** — ElevenLabs half done: `eleven:<voice_id>` voices sit next to Edge on the Worker and the Python server when `ELEVENLABS_API_KEY` is set on the server, with word timings, samples and plain-language errors; `/health` lists the providers. Next: `azure:` (Azure AI Speech, same engine protocol). Required before any store or index listing (see the Edge terms decision and `docs/plan.md` §3A)
+- ~~**Voice provider seam**~~ — Done: `eleven:`, `azure:`, `google:`, `polly:` and `openai:` voices sit next to Edge on the Worker and the Python server when their keys are set on the server, with word timings (exact from the service where it reports them, estimated for OpenAI and Google's Chirp/Journey voices), samples, server-side piece splitting for long text and plain-language errors; `/health` lists the providers. Azure uses the Edge engine's protocol on the official endpoint. Next: a live check of each provider in the health workflow once keys exist (see `docs/plan.md` §3A)
 - **Offline voice** — a Piper voice (the `voice-training/` work) in the extension and the desktop app, with word timings for highlighting. No terms, no network; the other prerequisite for a public listing
 - **Calibre plugin (v1)** — thin client to a dan-tts server, using only the Python standard library. Reads the book's text via `ebook-convert`, synthesizes in chunks with progress and cancel, and attaches MP3 and SRT to the book. Gotchas: Calibre's `add_format` replaces an existing format by default; the viewer can't show MP3 or SRT, so open audio in the system player; the Render free tier sleeps (30–60 s first request). Study: [`docs/calibre-plugin-feasibility.md`](docs/calibre-plugin-feasibility.md)
 
@@ -74,7 +74,7 @@ Prep tools exist (`voice-training/`). Everything below is open. Ordered by what 
 
 **Later**
 - **Provider abstraction.** Add a provider layer in `engine/src/` and `app/main.py` so a trained Piper voice sits alongside Edge and the hosted options.
-- **Hosted alternatives** (Polly, Google Cloud TTS) as fallbacks if Edge's unofficial endpoint breaks.
+- ~~**Hosted alternatives**~~ — Done: Azure, Google Cloud, Polly and OpenAI sit behind the provider seam (see *Voice provider seam* above), so a configured server keeps reading if Edge's unofficial endpoint breaks.
 
 ## Longer-Term / Experimental
 

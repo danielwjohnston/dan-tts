@@ -50,7 +50,14 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** the tester lists ElevenLabs voices beside Edge voices, reads with highlighting, exports captions; offline tests cover the adapter and routing on both servers; the health check lists voices from every configured provider; READMEs say where the key goes and what the free plan allows.
 
-**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Azure is next and needs a key.
+**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers.
+
+**Status (2026-10-26, later):** the owner asked for every major hosted API, so the seam now carries four more, each a URL, a key and an adapter (`worker/src/{azure,google,polly,openai}.js`, `app/providers/`), listed by `/health` and `/voices` and routed by prefix on both servers:
+- **Azure AI Speech** (`azure:`): the engine's own WebSocket protocol on the official endpoint with a key header (`engine/src/tts.js` took `url` and `ssml` options for it, and drops Azure's punctuation boundaries); full SSML, exact timings.
+- **Google Cloud Text-to-Speech** (`google:`): SSML with a `<mark>` before every word, timings from the returned timepoints; Chirp and Journey voices take no SSML, so they get estimated timings.
+- **Amazon Polly** (`polly:`): audio plus word speech marks in two SigV4-signed requests per piece; neural engine with a fallback to standard.
+- **OpenAI** (`openai:`): audio only, so timings are estimated from the MP3's length (frame walking in `worker/src/audio.js` / `app/providers/common.py`) and the words' lengths.
+Long text is split server-side into pieces each provider accepts and joined back into one MP3 (frames only, timings shifted). The Aristotle rule above ("at most two licensed providers") gave way to the owner's call; the Ockham rule held: one engine, no plugin system. Still open: a live check per provider in the health workflow, which needs keys.
 
 ### B. Markup editor
 

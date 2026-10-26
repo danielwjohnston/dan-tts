@@ -169,3 +169,14 @@ export async function sample(key, voice, { fetchImpl = globalThis.fetch } = {}) 
   const ct = res.headers.get('content-type') || '';
   return { audio: new Uint8Array(await res.arrayBuffer()), contentType: /^audio\//i.test(ct) ? ct : 'audio/mpeg' };
 }
+
+/** The provider in the shape worker/src/index.js routes by (the other providers export the same). */
+export const provider = {
+  id: 'elevenlabs', name: 'ElevenLabs', PREFIX, ID_RE, isVoice: isElevenVoice,
+  configured: (env) => !!env.ELEVENLABS_API_KEY,
+  unconfigured: 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)',
+  timings: 'exact',
+  listVoices: (env, opts) => listVoices(env.ELEVENLABS_API_KEY, opts),
+  synthesize: (text, voice, env, opts = {}) => synthesize(text, voice, { key: env.ELEVENLABS_API_KEY, model: env.ELEVENLABS_MODEL || DEFAULT_MODEL, fetchImpl: opts.fetchImpl }),
+  sample: (voice, env, opts) => sample(env.ELEVENLABS_API_KEY, voice, opts), // the preview clip: no credits spent
+};

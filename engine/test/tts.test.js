@@ -75,3 +75,14 @@ test('listVoices sends the token and returns the JSON list', async () => {
   assert.match(called.url, /voices\/list\?trustedclienttoken=.*&Sec-MS-GEC=[0-9A-F]{16}-[0-9A-F]{64}/);
   assert.deepStrictEqual(called.init, { headers: { Origin: 'x' } });
 });
+
+test('a caller may supply its own endpoint and SSML (Azure AI Speech speaks the same protocol)', async () => {
+  const punctuation = textFrame('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: 5000000, Duration: 100000, text: { Text: ',', BoundaryType: 'PunctuationBoundary' } } }] }));
+  const word = textFrame('audio.metadata', JSON.stringify({ Metadata: [{ Type: 'WordBoundary', Data: { Offset: 1000000, Duration: 4000000, text: { Text: 'Hello', BoundaryType: 'WordBoundary' } } }] }));
+  const script = [word, punctuation, binaryFrame('audio', new Uint8Array([7])), textFrame('turn.end', '{}')];
+  const ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice name='en-US-JennyNeural'>Hello, <break time=\"0.4s\" /> there</voice></speak>";
+  const r = await synthesize('ignored', { openSocket: fakeSocket(script), url: 'wss://eastus.tts.speech.microsoft.com/cognitiveservices/websocket/v1?X-ConnectionId=abc', ssml });
+  assert.deepStrictEqual(r.boundaries, [{ offset: 1000000, duration: 4000000, text: 'Hello' }]);
+  assert.strictEqual(fakeSocket.last.url, 'wss://eastus.tts.speech.microsoft.com/cognitiveservices/websocket/v1?X-ConnectionId=abc');
+  assert.ok(fakeSocket.last.sent[1].endsWith(ssml));
+});

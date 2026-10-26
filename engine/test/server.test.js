@@ -19,7 +19,9 @@ test('serverFor: unset means the default, empty means off, otherwise the URL wit
   assert.strictEqual(serverFor(''), '');
   assert.strictEqual(serverFor('  http://127.0.0.1:8787/// '), 'http://127.0.0.1:8787');
   assert.strictEqual(providerLabel('elevenlabs'), 'ElevenLabs');
-  assert.strictEqual(providerLabel('azure'), 'Azure');
+  assert.strictEqual(providerLabel('azure'), 'Azure AI Speech');
+  assert.strictEqual(providerLabel('polly'), 'Amazon Polly');
+  assert.strictEqual(providerLabel('acme'), 'Acme'); // an unknown provider is still labelled
 });
 
 test('listServerVoices keeps provider voices only, in the picker\'s shape', async () => {

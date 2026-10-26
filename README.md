@@ -7,7 +7,7 @@ Outputs MP3 directly, can return M4A/OGG/FLAC via ffmpeg transcode.
 
 ## Features
 
-- **17 Edge TTS voices** (en-US, no API key required)
+- **17 Edge TTS voices** (en-US, no API key required), plus **ElevenLabs, Azure AI Speech, Google Cloud, Amazon Polly and OpenAI voices** when the server has a key (see *Voice providers*)
 - **Formats**: mp3 (direct), m4a, ogg, flac (via ffmpeg)
 - **Word-level highlighting** — real-time word tracking during playback
 - **Paragraph chunking** — long text is split into paragraphs and generated in sequence with a progress bar; highlighting stays in sync across the whole text
@@ -36,7 +36,28 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
+## Voice providers
+
+Edge voices need no setup. Five hosted providers join them as soon as the server has a key; their voices
+list under their own heading in the tester, the extension and the desktop app, and route by the id's
+prefix. Keys are only ever read on the server (environment variables here, Secrets on Cloudflare; see
+`worker/README.md`). `/health` lists the providers in use.
+
+| Provider | Voice ids | Environment variables | Word timings |
+|---|---|---|---|
+| ElevenLabs | `eleven:<voice_id>` | `ELEVENLABS_API_KEY`; optional `ELEVENLABS_MODEL` (default `eleven_multilingual_v2`) | From the service. `/usage` reports the month's remaining credits (shown under the tester's voice picker) |
+| Azure AI Speech | `azure:<ShortName>`, e.g. `azure:en-US-JennyNeural` | `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` (e.g. `eastus`) | From the service (the same protocol as the Edge engine, official endpoint, full SSML) |
+| Google Cloud Text-to-Speech | `google:<name>`, e.g. `google:en-US-Neural2-F` | `GOOGLE_TTS_API_KEY` (an API key restricted to the Text-to-Speech API) | From SSML marks. Chirp and Journey voices take no SSML, so theirs are estimated |
+| Amazon Polly | `polly:<VoiceId>`, e.g. `polly:Joanna` | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`; optional `AWS_REGION` (default `us-east-1`), `AWS_SESSION_TOKEN`, `POLLY_ENGINE` (default `neural`, falls back to `standard`) | From word speech marks. Requests are signed here (SigV4), no SDK |
+| OpenAI | `openai:<voice>`, e.g. `openai:alloy` | `OPENAI_API_KEY`; optional `OPENAI_TTS_MODEL` (default `gpt-4o-mini-tts`) | Estimated from the clip's length and the words' lengths (the API reports none) |
+
+Provider voice lists hold en-US voices like the Edge list; `VOICE_LOCALES=en-US,en-GB` widens them and
+`VOICE_LOCALES=*` lists everything. Long text is split into pieces each provider accepts and joined back
+into one MP3 with the timings shifted, so paragraphs of any length read as one clip. Markup tokens
+(`[pause 800ms]`, `word[say: respelling]`) become real `<break>` tags for ElevenLabs, Azure, Google and
+Polly, and punctuation for Edge and OpenAI. Every provider answers a bad key, used-up quota or overlong
+text in plain words, and the Edge voices keep working while it does. These are paid services billed to
+the server owner's account; the tester says so under the voice picker.
 
 ## Usage
 
@@ -95,7 +116,7 @@ on every push to `main` and preview every other branch; the build step assembles
 1. Sign in at https://render.com with GitHub (no card needed for the free plan).
 2. **New → Blueprint**, pick this repo, and click **Apply**.
 3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
-4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices.
+4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY`, `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`, `GOOGLE_TTS_API_KEY`, `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` or `OPENAI_API_KEY` to enable those providers' voices (see **Voice providers** above).
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
 

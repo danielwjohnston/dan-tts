@@ -1,6 +1,6 @@
 """
 Dan's TTS Project (FastAPI)
-- Uses Microsoft Edge TTS voices (no API key) via edge-tts
+- Uses Microsoft Edge TTS voices (no API key) via edge-tts, plus the hosted providers in app/providers/ when their keys are set
 - Returns MP3 directly; transcodes to m4a/ogg/flac with ffmpeg
 """
 
@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Literal, Optional
 from urllib.parse import quote, urljoin, urlparse
 
@@ -29,6 +30,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import FileResponse, Response
+
+from app.providers import azure, google, openai_tts, polly
 
 SUPPORTED_FORMATS = Literal["mp3", "m4a", "ogg", "flac"]
 DEFAULT_VOICE = "en-US-AriaNeural"
@@ -52,6 +55,17 @@ ELEVEN_API = "https://api.elevenlabs.io"
 
 _voice_cache: Optional[List[Dict]] = None
 _eleven_voice_cache: Optional[List[Dict]] = None
+_provider_voice_cache: Dict[str, List[Dict]] = {}  # the other providers' listings, by provider id
+
+# The hosted providers, in the order /health and /voices list them (the same order as the Worker). ElevenLabs
+# is the `_eleven_*` helpers below; the others live in app/providers/. Each is a URL, a key and an adapter.
+_ELEVEN = SimpleNamespace(
+    ID="elevenlabs", NAME="ElevenLabs", PREFIX=ELEVEN_PREFIX, ID_RE=ELEVEN_ID_RE, TIMINGS="exact",
+    configured=lambda: bool(ELEVENLABS_API_KEY),
+    UNCONFIGURED="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)",
+    synthesize=lambda text, voice: _eleven_synthesize(text, voice),
+)
+PROVIDERS = [_ELEVEN, azure, google, polly, openai_tts]
 
 app = FastAPI(title="Dan's TTS Project", version="0.1.0")
 app.add_middleware(
@@ -88,11 +102,16 @@ class ExtractTextRequest(BaseModel):
 
 
 def _valid_voice(voice: str) -> bool:
-    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice))
+    return bool(VOICE_NAME_RE.match(voice) or any(p.ID_RE.match(voice) for p in PROVIDERS))
+
+
+def _provider_of(voice: str):
+    """The hosted provider a voice id belongs to (by its prefix), or None for an Edge voice."""
+    return next((p for p in PROVIDERS if voice.startswith(p.PREFIX)), None)
 
 
 def _providers() -> list[str]:
-    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else [])
+    return ["edge"] + [p.ID for p in PROVIDERS if p.configured()]
 
 
 def _eleven_error(status: int, body: str) -> HTTPException:
@@ -304,8 +323,9 @@ async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
 
 
 async def synthesize_mp3(text: str, voice: str) -> bytes:
-    if voice.startswith(ELEVEN_PREFIX):
-        audio, _ = await _eleven_synthesize(text, voice)
+    provider = _provider_of(voice)
+    if provider is not None:
+        audio, _ = await provider.synthesize(text, voice)
         return audio
     communicator = edge_tts.Communicate(text, voice=voice)
     audio_chunks = []
@@ -318,8 +338,9 @@ async def synthesize_mp3(text: str, voice: str) -> bytes:
 
 
 async def synthesize_with_boundaries(text: str, voice: str):
-    if voice.startswith(ELEVEN_PREFIX):
-        return await _eleven_synthesize(text, voice)
+    provider = _provider_of(voice)
+    if provider is not None:
+        return await provider.synthesize(text, voice)
     communicator = edge_tts.Communicate(text, voice=voice, boundary="WordBoundary")
     audio_chunks = []
     boundaries = []
@@ -388,7 +409,26 @@ async def list_voices() -> list[dict]:
             for v in voices
             if v.get("Locale") == "en-US"
         ]
-    return _voice_cache + await _eleven_voices_cached()
+    voices = _voice_cache + await _eleven_voices_cached()
+    for provider in PROVIDERS[1:]:
+        voices += await _provider_voices_cached(provider)
+    return voices
+
+
+async def _provider_voices_cached(provider) -> list[dict]:
+    """A hosted provider's voices when its key is set. A failed listing is not cached and hides no other voices."""
+    if not provider.configured():
+        return []
+    if provider.ID not in _provider_voice_cache:
+        try:
+            _provider_voice_cache[provider.ID] = await provider.list_voices()
+        except HTTPException as exc:
+            print(f"{provider.NAME} voice list unavailable: {exc.detail}")
+            return []
+        except Exception as exc:  # a malformed listing must not take the other voices down with it
+            print(f"{provider.NAME} voice list unavailable: {exc!r}")
+            return []
+    return _provider_voice_cache[provider.ID]
 
 
 async def _eleven_voices_cached() -> list[dict]:
@@ -447,6 +487,7 @@ async def voices(refresh: bool = False):
     if refresh:
         _voice_cache = None
         _eleven_voice_cache = None
+        _provider_voice_cache.clear()
     voices = await list_voices()
     for v in voices:
         v["sampleUrl"] = f"/samples/{v['shortName']}"
@@ -506,10 +547,17 @@ async def synthesize_with_timing(payload: SynthesisRequest):
 
 async def ensure_sample(voice: str) -> Path:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-    sample_path = SAMPLES_DIR / (f"eleven-{voice[len(ELEVEN_PREFIX):]}.mp3" if voice.startswith(ELEVEN_PREFIX) else f"{voice}.mp3")
+    provider = _provider_of(voice)
+    # Provider ids are validated by their regexes (no slashes, no dots), so they are safe as file names once the colons go
+    sample_path = SAMPLES_DIR / (f"{'eleven' if provider is _ELEVEN else provider.ID}-{voice[len(provider.PREFIX):].replace(':', '-')}.mp3" if provider else f"{voice}.mp3")
     if sample_path.exists():
         return sample_path
-    if voice.startswith(ELEVEN_PREFIX):
+    if provider is not None and provider is not _ELEVEN:
+        # The sample text in the provider's voice (a few dozen characters), kept on disk like the Edge samples
+        if not provider.configured():
+            raise HTTPException(status_code=503, detail=provider.UNCONFIGURED)
+        audio, _ = await provider.synthesize(SAMPLE_TEXT, voice)
+    elif voice.startswith(ELEVEN_PREFIX):
         # The provider's own preview clip, so a sample costs no credits
         if not ELEVENLABS_API_KEY:
             raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")

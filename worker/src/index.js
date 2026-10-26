@@ -1,23 +1,31 @@
 // dan-tts API on Cloudflare Workers. Mirrors the Python server's endpoints so the
 // tester (and anything else) can switch by changing the API base URL. Uses the shared
-// engine to talk to Microsoft's voice service directly, and ElevenLabs when the
-// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>").
+// engine to talk to Microsoft's voice service directly, and the hosted providers whose
+// secrets are set: ElevenLabs ("eleven:<id>"), Azure AI Speech ("azure:<name>"), Google
+// Cloud Text-to-Speech ("google:<name>"), Amazon Polly ("polly:<id>") and OpenAI ("openai:<voice>").
 import { synthesize, connectionHeaders, listVoices } from '../../engine/src/tts.js';
 import { extractText, HttpError } from './extract.js';
 import * as eleven from './elevenlabs.js';
+import * as azure from './azure.js';
+import * as google from './google.js';
+import * as polly from './polly.js';
+import * as openai from './openai.js';
 
 const MAX_TEXT_CHARS = 20000;
-const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs
-const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice);
+const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; provider voices carry a prefix
+// The hosted providers, in the order /health and /voices list them. Each is a URL, a key and an adapter.
+export const PROVIDERS = [eleven.provider, azure.provider, google.provider, polly.provider, openai.provider];
+const providerOf = (voice) => PROVIDERS.find((p) => p.isVoice(voice));
+const validVoice = (voice) => VOICE_NAME_RE.test(voice) || PROVIDERS.some((p) => p.ID_RE.test(voice));
 const SAMPLE_TEXT = 'This is a sample of the selected voice.';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
 const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { ...CORS, ...headers } });
 
 // Workers' outbound WebSocket: fetch() with Upgrade, then accept(). Wrapped in the
-// small browser-style interface the engine expects.
-async function openSocket(url) {
-  const resp = await fetch(url.replace('wss://', 'https://'), { headers: { Upgrade: 'websocket', ...connectionHeaders() } });
+// small browser-style interface the engine expects. Edge gets its own headers; Azure passes a key header.
+async function openSocket(url, headers = connectionHeaders()) {
+  const resp = await fetch(url.replace('wss://', 'https://'), { headers: { Upgrade: 'websocket', ...headers } });
   const ws = resp.webSocket;
   if (!ws) throw new HttpError(502, `Voice service refused the connection (HTTP ${resp.status})`);
   ws.binaryType = 'arraybuffer'; // the default here is Blob
@@ -48,11 +56,14 @@ async function readRequest(request) {
   return { text, voice, format };
 }
 
-// Route by provider: ElevenLabs ids carry a prefix, everything else is an Edge voice
-const tts = (text, voice, env) => eleven.isElevenVoice(voice)
-  ? eleven.synthesize(text, voice, { key: env.ELEVENLABS_API_KEY, model: env.ELEVENLABS_MODEL || eleven.DEFAULT_MODEL })
-  : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
-const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : [])];
+// Route by provider: provider ids carry a prefix, everything else is an Edge voice
+function tts(text, voice, env) {
+  const p = providerOf(voice);
+  if (p) return p.synthesize(text, voice, env, { openSocket });
+  return synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
+}
+const configured = (env) => PROVIDERS.filter((p) => p.configured(env));
+const providers = (env) => ['edge', ...configured(env).map((p) => p.id)];
 
 // ---- Captions (same format as the Python server) ----
 const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -97,12 +108,13 @@ async function route(request, env, ctx) {
       const voices = (await listVoices({ headers: connectionHeaders() }))
         .filter((v) => v.Locale === 'en-US')
         .map((v) => ({ name: v.Name, shortName: v.ShortName, locale: v.Locale, localeName: v.LocaleName, gender: v.Gender, styleList: v.StyleList || [], provider: 'edge', sampleUrl: `/samples/${v.ShortName}` }));
-      if (env.ELEVENLABS_API_KEY) {
-        // A failed ElevenLabs listing (bad key, outage) must not hide the Edge voices
-        try { voices.push(...await eleven.listVoices(env.ELEVENLABS_API_KEY)); }
-        catch (e) { console.error(`ElevenLabs voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
+      let failed = false;
+      for (const p of configured(env)) {
+        // A failed provider listing (bad key, outage) must not hide the other voices, and is not cached
+        try { voices.push(...await p.listVoices(env)); }
+        catch (e) { console.error(`${p.name} voice list unavailable: ${e.message}`); failed = true; }
       }
-      return json(voices);
+      return failed ? json(voices, 200, { 'Cache-Control': 'no-store' }) : json(voices);
     }, { variant: providers(env).join(',') });
   }
 
@@ -126,11 +138,13 @@ async function route(request, env, ctx) {
   if (request.method === 'GET' && sample) {
     const voice = decodeURIComponent(sample[1]);
     if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
-    if (eleven.isElevenVoice(voice) && !env.ELEVENLABS_API_KEY) throw new HttpError(503, 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)');
+    const p = providerOf(voice);
+    if (p && !p.configured(env)) throw new HttpError(503, p.unconfigured);
     // variant "audio": samples cached before the content-type fix (text/plain previews) are not reused
     return cached(request, ctx, 7 * 86400, async () => {
-      if (eleven.isElevenVoice(voice)) {
-        const { audio, contentType } = await eleven.sample(env.ELEVENLABS_API_KEY, voice);
+      if (p?.sample) {
+        // The provider's own preview clip where it has one (ElevenLabs); the others speak the sample text
+        const { audio, contentType } = await p.sample(voice, env);
         return new Response(audio, { headers: { ...CORS, 'Content-Type': contentType } });
       }
       const { audio } = await tts(SAMPLE_TEXT, voice, env);

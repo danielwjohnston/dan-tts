@@ -1,10 +1,11 @@
 // Voices served by the project's own API (the Cloudflare Worker, or the Python server).
-// Licensed providers such as ElevenLabs sit behind it and their keys stay there; Edge voices
-// never go through it. Shared by the browser extension, the desktop app and their tests.
+// Licensed providers (ElevenLabs, Azure AI Speech, Google Cloud Text-to-Speech, Amazon Polly,
+// OpenAI) sit behind it and their keys stay there; Edge voices never go through it. Shared by
+// the browser extension, the desktop app and their tests.
 
 export const DEFAULT_SERVER = 'https://dan-tts.macdaddydwj.workers.dev';
 
-/** Provider voice ids carry a prefix ("eleven:<id>"); Edge ids ("en-US-AriaNeural") have no colon. */
+/** Provider voice ids carry a prefix ("eleven:<id>", "azure:<name>", …); Edge ids ("en-US-AriaNeural") have no colon. */
 export const isServerVoice = (voice) => /^[a-z][a-z0-9]*:/i.test(String(voice || ''));
 
 /**
@@ -16,7 +17,7 @@ export function serverFor(setting) {
   return String(setting).trim().replace(/\/+$/, '');
 }
 
-const LABELS = { elevenlabs: 'ElevenLabs' };
+const LABELS = { elevenlabs: 'ElevenLabs', azure: 'Azure AI Speech', google: 'Google Cloud', polly: 'Amazon Polly', openai: 'OpenAI' };
 export const providerLabel = (provider) => LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Server');
 
 /** The server's own explanation of a failure ({"detail": "..."}), else the status. */

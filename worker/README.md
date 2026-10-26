@@ -45,6 +45,19 @@ Two things that look right but are not. A **Build variable** (Settings → Build
 
 `/usage` reports the month's remaining credits (the tester shows them under the voice picker, and the health check logs them). Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
 
+## The other providers: Azure, Google, Polly, OpenAI
+
+The same steps, with these Secrets (Settings → Variables and Secrets, type Secret, then Deploy; add them to **Previews Base** too if previews should have them). Each provider's voices appear as soon as its secrets are set, `/health` lists it, and a request with its prefix goes to it. All of them are billed to your account by the provider; the tester says so under the voice picker.
+
+| Provider | Secrets | Voice ids | Notes |
+|---|---|---|---|
+| Azure AI Speech | `AZURE_SPEECH_KEY`, `AZURE_SPEECH_REGION` (e.g. `eastus`) | `azure:en-US-JennyNeural` | Azure portal → the Speech resource → Keys and Endpoint. The Worker speaks Azure's WebSocket (the engine's protocol) with the key header; exact word timings, full SSML |
+| Google Cloud Text-to-Speech | `GOOGLE_TTS_API_KEY` | `google:en-US-Neural2-F` | Google Cloud console → APIs & Services → Credentials → API key, restricted to the Cloud Text-to-Speech API. Timings from SSML marks; Chirp and Journey voices take no SSML, so theirs are estimated |
+| Amazon Polly | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`; optional `AWS_REGION` (default `us-east-1`), `AWS_SESSION_TOKEN`, `POLLY_ENGINE` (default `neural`) | `polly:Joanna` | An IAM user with `polly:SynthesizeSpeech` and `polly:DescribeVoices` only. Requests are signed in the Worker (SigV4) |
+| OpenAI | `OPENAI_API_KEY`; optional `OPENAI_TTS_MODEL` (default `gpt-4o-mini-tts`) | `openai:alloy` | platform.openai.com → API keys. The API returns no timings, so highlighting uses estimates from the clip's length |
+
+Provider voice lists hold en-US voices like the Edge list; a `VOICE_LOCALES` secret (`en-US,en-GB`, or `*` for every locale) widens them. Long text is split into pieces each provider accepts (Google: about 1,000 characters once every word carries a mark; Polly 2,500; OpenAI 4,000; Azure 8,000) and joined back into one MP3 with the timings shifted. `node --test worker/test/*.test.js` covers every adapter offline.
+
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.
 - Load from URL can't reach sites that block automated access (it says so, with an "Open in browser" link), and pages built entirely in JavaScript give only their description. The browser extension reads such pages in place.

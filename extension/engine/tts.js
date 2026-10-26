@@ -70,16 +70,20 @@ function parseBinaryFrame(buf) {
  * @param {string} [opts.voice]  e.g. 'en-US-AriaNeural'
  * @param {string} [opts.rate]   e.g. '+0%', '+50%'
  * @param {(url: string) => WebSocket | Promise<WebSocket>} opts.openSocket  platform-specific socket factory
+ * @param {string} [opts.url]    the service to connect to; default: Edge's endpoint with its token. Azure AI Speech
+ *                               speaks the same protocol, so a server with a key passes its own endpoint here
+ * @param {string} [opts.ssml]   a complete SSML document to send in place of the one built from `text`
+ *                               (for providers that take real SSML: break tags, say-as, prosody)
  * @returns {Promise<{ audio: Uint8Array, boundaries: {offset:number,duration:number,text:string}[] }>}
  */
-export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pitch = '+0Hz', volume = '+0%', openSocket, timeoutMs = 60000 } = {}) {
+export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pitch = '+0Hz', volume = '+0%', openSocket, timeoutMs = 60000, url, ssml } = {}) {
   if (!openSocket) throw new Error('openSocket is required');
-  const ssml =
+  ssml = ssml ||
     "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>" +
     `<voice name='${escapeXml(voice)}'><prosody pitch='${pitch}' rate='${rate}' volume='${volume}'>` +
     `${escapeXml(cleanText(text))}</prosody></voice></speak>`;
 
-  return Promise.resolve(openSocket(connectionUrl())).then((ws) => new Promise((resolve, reject) => {
+  return Promise.resolve(openSocket(url || connectionUrl())).then((ws) => new Promise((resolve, reject) => {
     ws.binaryType = 'arraybuffer';
     const parts = [];
     const boundaries = [];
@@ -106,7 +110,8 @@ export function synthesize(text, { voice = 'en-US-AriaNeural', rate = '+0%', pit
         const { headers, body } = parseTextFrame(ev.data);
         if (headers.Path === 'audio.metadata') {
           for (const m of JSON.parse(body).Metadata) {
-            if (m.Type === 'WordBoundary') {
+            // Azure also reports punctuation as its own boundary; the highlighter wants words only
+            if (m.Type === 'WordBoundary' && m.Data?.text?.BoundaryType !== 'PunctuationBoundary') {
               boundaries.push({ offset: m.Data.Offset, duration: m.Data.Duration, text: unescapeXml(m.Data.text.Text) });
             }
           }

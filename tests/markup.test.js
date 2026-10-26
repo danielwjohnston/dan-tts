@@ -100,3 +100,21 @@ test('strip() returns token-free text exactly as it was, and tidies only around 
   assert.strictEqual(strip('and then [pause]. Next.'), 'and then. Next.');
   assert.strictEqual(strip('one [pause] two  spaced'), 'one two  spaced');
 });
+
+test('every provider is known: break tags for the SSML providers, punctuation for Edge and OpenAI', () => {
+  const { PROVIDERS } = require('../static/markup.js');
+  assert.deepStrictEqual(PROVIDERS, ['edge', 'elevenlabs', 'azure', 'google', 'polly', 'openai']);
+  assert.strictEqual(providerOf('azure:en-US-JennyNeural'), 'azure');
+  assert.strictEqual(providerOf('google:en-US-Neural2-F'), 'google');
+  assert.strictEqual(providerOf('polly:Joanna'), 'polly');
+  assert.strictEqual(providerOf('openai:alloy'), 'openai');
+  assert.strictEqual(providerOf('OPENAI:alloy'), 'openai');
+  assert.strictEqual(providerOf('bogus:thing'), 'edge');
+  for (const p of ['azure', 'google', 'polly']) {
+    assert.strictEqual(lower('Turn left [pause] at the mill.', p), 'Turn left <break time="0.4s" /> at the mill.', p);
+    assert.strictEqual(lower('Wait [pause 5s] here', p), 'Wait <break time="5.0s" /> here', p); // the full five seconds, not ElevenLabs’ three
+  }
+  assert.strictEqual(lower('Turn left [pause] at the mill.', 'openai'), 'Turn left, at the mill.');
+  assert.strictEqual(lower('Turn left [pause] at the mill.', 'openai:alloy'), 'Turn left, at the mill.');
+  assert.strictEqual(lower('a [pause] b', 'azure:en-US-JennyNeural'), 'a <break time="0.4s" /> b');
+});

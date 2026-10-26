@@ -6,24 +6,30 @@
 //
 // Anything else in square brackets is left alone, so citations like [1] or [citation needed]
 // read as they always did. A token body stays on one line and holds no brackets, so a half-typed
-// token cannot swallow the paragraphs after it. Edge voices take no SSML, so a pause becomes
-// punctuation (a comma, a full stop, or a paragraph break, which the tester then synthesizes as
-// its own request) and a respelling replaces the word; ElevenLabs takes an inline
-// <break time="0.4s" /> tag (3 s at most) and the same respellings. strip() gives the written
-// text with the tokens removed; nothing displays it yet (highlighting and captions show the
-// spoken words), it is here for the display and caption path to come.
+// token cannot swallow the paragraphs after it. Edge and OpenAI voices take no SSML, so a pause
+// becomes punctuation (a comma, a full stop, or a paragraph break, which the tester then
+// synthesizes as its own request) and a respelling replaces the word; ElevenLabs, Azure, Google
+// and Polly take an inline <break time="0.4s" /> tag (3 s at most for ElevenLabs) and the same
+// respellings. strip() gives the written text with the tokens removed; nothing displays it yet
+// (highlighting and captions show the spoken words), it is here for the display and caption
+// path to come.
 (function (root) {
   const PAUSE_DEFAULT = 400, PAUSE_MIN = 100, PAUSE_MAX = 5000, ELEVEN_BREAK_MAX = 3000;
   const TOKEN = /\[pause(?:[ \t]+(\d+(?:\.\d+)?)[ \t]*(ms|s))?[ \t]*\]|\[(say|spell):[ \t]*([^\[\]\n]*?)[ \t]*\]/gi;
   // The word a respelling applies to: the run before the token, split into its core and the
   // punctuation glued to its end (kept in both the written and the spoken text)
   const WORD_BEFORE = /(\S*?)([^\p{L}\p{N}\s]*)$/u;
-  const PROVIDERS = ['edge', 'elevenlabs'];
+  // Voice id prefix → provider (the servers route by the same prefixes); Edge ids have no prefix
+  const PREFIXES = { eleven: 'elevenlabs', azure: 'azure', google: 'google', polly: 'polly', openai: 'openai' };
+  const PROVIDERS = ['edge'].concat(Object.keys(PREFIXES).map((k) => PREFIXES[k]));
+  // Providers that read a <break> tag inside the text; the rest get punctuation
+  const BREAK_TAGS = { elevenlabs: ELEVEN_BREAK_MAX, azure: PAUSE_MAX, google: PAUSE_MAX, polly: PAUSE_MAX };
   const str = (v) => (v == null ? '' : String(v));
 
-  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, anything else is Edge. */
+  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, "azure:…", "google:…", "polly:…", "openai:…" theirs, anything else Edge. */
   function providerOf(voice) {
-    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : 'edge';
+    const m = str(voice).match(/^([a-z]+):/i);
+    return (m && PREFIXES[m[1].toLowerCase()]) || 'edge';
   }
 
   /** Text → segments: {type:'text', text} | {type:'pause', ms} | {type:'say', written, spoken} | {type:'spell', letters}. */
@@ -93,7 +99,7 @@
     return endsSentence || endsClause ? ' ' : ', ';
   }
 
-  const breakTag = (ms) => `<break time="${(Math.min(ELEVEN_BREAK_MAX, ms) / 1000).toFixed(2).replace(/0$/, '')}s" />`;
+  const breakTag = (ms, max) => `<break time="${(Math.min(max, ms) / 1000).toFixed(2).replace(/0$/, '')}s" />`;
 
   /** The text a provider should be sent. */
   function lower(input, provider) {
@@ -110,13 +116,13 @@
       if (glued) { out = out.replace(/[ \t]+$/, '') + glued[1]; next.text = next.text.slice(glued[0].length); }
       const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
       if (!rest) return; // nothing is spoken after it
-      if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
+      if (BREAK_TAGS[provider]) out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms, BREAK_TAGS[provider])} `;
       else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
     });
     return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
   }
 
-  const api = { parse, strip, lower, hasMarkup, providerOf, PAUSE_DEFAULT, PAUSE_MIN, PAUSE_MAX };
+  const api = { parse, strip, lower, hasMarkup, providerOf, PROVIDERS, PAUSE_DEFAULT, PAUSE_MIN, PAUSE_MAX };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.danMarkup = api;
 })(typeof self !== 'undefined' ? self : this);

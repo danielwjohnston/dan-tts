@@ -203,3 +203,57 @@ test('/usage reports Edge as unlimited and ElevenLabs credits when configured', 
   await Promise.all([callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage')]);
   assert.strictEqual(upstream, 1);
 });
+
+// ---- The other hosted providers through the routes ----
+import { mp3 } from './helpers.js';
+
+test('/health lists every configured provider, in a fixed order', async () => {
+  const env = { OPENAI_API_KEY: 'k', AZURE_SPEECH_KEY: 'a', AZURE_SPEECH_REGION: 'eastus', AWS_ACCESS_KEY_ID: 'i', AWS_SECRET_ACCESS_KEY: 's', GOOGLE_TTS_API_KEY: 'g', ELEVENLABS_API_KEY: 'e' };
+  assert.deepStrictEqual((await callWith(env, '/health').then((r) => r.json())).providers, ['edge', 'elevenlabs', 'azure', 'google', 'polly', 'openai']);
+  // Azure needs both its key and its region
+  assert.deepStrictEqual((await callWith({ AZURE_SPEECH_KEY: 'a' }, '/health').then((r) => r.json())).providers, ['edge']);
+});
+
+test('provider voices are rejected clearly when their keys are missing, and validated by prefix', async () => {
+  for (const [voice, key] of [['azure:en-US-JennyNeural', 'AZURE_SPEECH_KEY'], ['google:en-US-Neural2-F', 'GOOGLE_TTS_API_KEY'], ['polly:Joanna', 'AWS_ACCESS_KEY_ID'], ['openai:alloy', 'OPENAI_API_KEY']]) {
+    const res = await post('/synthesize', { text: 'Hi', voice });
+    assert.strictEqual(res.status, 503, voice);
+    assert.match((await res.json()).detail, new RegExp(key));
+    assert.strictEqual((await call(`/samples/${voice}`)).status, 503, voice);
+  }
+  assert.strictEqual((await post('/synthesize', { text: 'Hi', voice: 'openai:ALLOY' })).status, 400);
+  assert.strictEqual((await post('/synthesize', { text: 'Hi', voice: 'polly:Jo anna' })).status, 400);
+});
+
+test('openai: and polly: voices route to their providers for timing, export and samples; /voices merges every provider', async (t) => {
+  const realFetch = globalThis.fetch, realCaches = globalThis.caches;
+  globalThis.caches = { default: { match: async () => undefined, put: async () => {} } };
+  const marks = '{"time":0,"type":"word","start":0,"end":2,"value":"Hi"}\n{"time":100,"type":"word","start":3,"end":8,"value":"there"}\n';
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.startsWith('https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list')) return new Response(JSON.stringify(EDGE_VOICES), { headers: { 'Content-Type': 'application/json' } });
+    if (url === 'https://api.openai.com/v1/audio/speech') return new Response(mp3(10), { headers: { 'Content-Type': 'audio/mpeg' } });
+    if (url.startsWith('https://polly.us-east-1.amazonaws.com/v1/voices')) return new Response(JSON.stringify({ Voices: [{ Id: 'Joanna', Name: 'Joanna', Gender: 'Female', LanguageCode: 'en-US', LanguageName: 'US English', SupportedEngines: ['neural'] }] }), { headers: { 'Content-Type': 'application/json' } });
+    if (url === 'https://polly.us-east-1.amazonaws.com/v1/speech') return JSON.parse(init.body).OutputFormat === 'mp3' ? new Response(mp3(10)) : new Response(marks);
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; globalThis.caches = realCaches; });
+  const env = { OPENAI_API_KEY: 'k', AWS_ACCESS_KEY_ID: 'i', AWS_SECRET_ACCESS_KEY: 's' };
+  const voices = await callWith(env, '/voices').then((r) => r.json());
+  assert.deepStrictEqual(voices.map((v) => v.provider).filter((p, i, a) => a.indexOf(p) === i), ['edge', 'polly', 'openai']);
+  assert.ok(voices.some((v) => v.shortName === 'polly:Joanna') && voices.some((v) => v.shortName === 'openai:alloy'));
+
+  const timing = await callWith(env, '/synthesize_with_timing', { method: 'POST', body: JSON.stringify({ text: 'Hi there', voice: 'openai:alloy' }) }).then((r) => r.json());
+  assert.strictEqual(Buffer.from(timing.audio, 'base64').length, 1440);
+  assert.deepStrictEqual(timing.boundaries.map((b) => b.text), ['Hi', 'there']);
+  assert.ok(timing.boundaries[1].offset > 0 && timing.boundaries[1].offset + timing.boundaries[1].duration <= 2_400_000);
+
+  const srt = await callWith(env, '/export?format=srt', { method: 'POST', body: JSON.stringify({ text: 'Hi there', voice: 'polly:Joanna' }) });
+  assert.strictEqual(srt.status, 200);
+  assert.match(await srt.text(), /1\n00:00:00,000 --> 00:00:00,100\nHi\n\n2\n00:00:00,100 --> 00:00:00,240\nthere/);
+
+  const sample = await callWith(env, '/samples/openai:alloy');
+  assert.strictEqual(sample.status, 200);
+  assert.strictEqual(sample.headers.get('content-type'), 'audio/mpeg');
+  assert.strictEqual((await sample.arrayBuffer()).byteLength, 1440);
+});
