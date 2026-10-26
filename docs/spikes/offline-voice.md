@@ -4,6 +4,8 @@ Date: 2026-10-26. Research only; nothing built yet. Question from `docs/plan.md`
 engine can read a page with highlighting while the network is off, in the extension (Chrome and Firefox)
 and the desktop app, with licensing clean enough for a public listing?
 
+**Decision (owner, 2026-10-26):** the repository is licensed GPL-3.0-or-later and the first offline voice is Piper with the public-domain `en_US-ljspeech-medium` voice. The spike below is being run; results go in `offline-voice-piper-results.md`.
+
 ## Short answer
 
 **Build the first slice with Piper** (VITS, ONNX) running in the browser through onnxruntime-web, with

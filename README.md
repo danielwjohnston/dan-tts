@@ -99,6 +99,10 @@ on every push to `main` and preview every other branch; the build step assembles
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
 
+## Licence
+
+GNU General Public License v3.0 or later (see `LICENSE`). This lets the project ship the offline voice it has chosen (Piper and the eSpeak-ng phonemizer are GPL-3.0). Third-party libraries bundled with the extension keep their own licences (see `extension/lib/`); the voices served by Microsoft Edge, ElevenLabs and Azure are governed by those services' terms, and any Piper voice shipped must be public domain or similarly free (`docs/spikes/offline-voice.md`).
+
 ## Tests
 
 ```bash
