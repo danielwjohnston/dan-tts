@@ -1,11 +1,14 @@
 // dan-tts API on Cloudflare Workers. Mirrors the Python server's endpoints so the
 // tester (and anything else) can switch by changing the API base URL. Uses the shared
-// engine to talk to Microsoft's voice service directly.
+// engine to talk to Microsoft's voice service directly, and ElevenLabs when the
+// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>").
 import { synthesize, connectionHeaders, listVoices } from '../../engine/src/tts.js';
 import { extractText, HttpError } from './extract.js';
+import * as eleven from './elevenlabs.js';
 
 const MAX_TEXT_CHARS = 20000;
-const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/;
+const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs
+const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice);
 const SAMPLE_TEXT = 'This is a sample of the selected voice.';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
@@ -40,12 +43,16 @@ async function readRequest(request) {
   const format = body.format || 'mp3';
   if (!text.trim()) throw new HttpError(400, 'Text is required');
   if (text.length > MAX_TEXT_CHARS) throw new HttpError(422, `Text is limited to ${MAX_TEXT_CHARS} characters per request`);
-  if (!VOICE_NAME_RE.test(voice)) throw new HttpError(400, 'Invalid voice name');
+  if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
   if (format !== 'mp3') throw new HttpError(400, 'The Cloudflare Worker returns MP3 only (no ffmpeg here). Use format "mp3", or the Python server for m4a/ogg/flac.');
   return { text, voice, format };
 }
 
-const tts = (text, voice) => synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
+// Route by provider: ElevenLabs ids carry a prefix, everything else is an Edge voice
+const tts = (text, voice, env) => eleven.isElevenVoice(voice)
+  ? eleven.synthesize(text, voice, { key: env.ELEVENLABS_API_KEY, model: env.ELEVENLABS_MODEL || eleven.DEFAULT_MODEL })
+  : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
+const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : [])];
 
 // ---- Captions (same format as the Python server) ----
 const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -58,7 +65,7 @@ async function cached(request, ctx, ttlSeconds, make) {
   const hit = await cache.match(key);
   if (hit) return hit;
   const res = await make();
-  if (res.ok) {
+  if (res.ok && res.headers.get('Cache-Control') !== 'no-store') {
     const copy = new Response(res.clone().body, res);
     copy.headers.set('Cache-Control', `public, max-age=${ttlSeconds}`);
     ctx.waitUntil(cache.put(key, copy));
@@ -66,17 +73,22 @@ async function cached(request, ctx, ttlSeconds, make) {
   return res;
 }
 
-async function route(request, ctx) {
+async function route(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
-  if (request.method === 'GET' && (path === '/health' || path === '/')) return json({ status: 'ok', runtime: 'cloudflare-worker' });
+  if (request.method === 'GET' && (path === '/health' || path === '/')) return json({ status: 'ok', runtime: 'cloudflare-worker', providers: providers(env) });
 
   if (request.method === 'GET' && path === '/voices') {
     return cached(request, ctx, 86400, async () => {
       const voices = (await listVoices({ headers: connectionHeaders() }))
         .filter((v) => v.Locale === 'en-US')
-        .map((v) => ({ name: v.Name, shortName: v.ShortName, locale: v.Locale, localeName: v.LocaleName, gender: v.Gender, styleList: v.StyleList || [], sampleUrl: `/samples/${v.ShortName}` }));
+        .map((v) => ({ name: v.Name, shortName: v.ShortName, locale: v.Locale, localeName: v.LocaleName, gender: v.Gender, styleList: v.StyleList || [], provider: 'edge', sampleUrl: `/samples/${v.ShortName}` }));
+      if (env.ELEVENLABS_API_KEY) {
+        // A failed ElevenLabs listing (bad key, outage) must not hide the Edge voices
+        try { voices.push(...await eleven.listVoices(env.ELEVENLABS_API_KEY)); }
+        catch (e) { console.error(`ElevenLabs voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
+      }
       return json(voices);
     });
   }
@@ -84,22 +96,27 @@ async function route(request, ctx) {
   const sample = path.match(/^\/samples\/([^/]+)$/);
   if (request.method === 'GET' && sample) {
     const voice = decodeURIComponent(sample[1]);
-    if (!VOICE_NAME_RE.test(voice)) throw new HttpError(400, 'Invalid voice name');
+    if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
+    if (eleven.isElevenVoice(voice) && !env.ELEVENLABS_API_KEY) throw new HttpError(503, 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)');
     return cached(request, ctx, 7 * 86400, async () => {
-      const { audio } = await tts(SAMPLE_TEXT, voice);
+      if (eleven.isElevenVoice(voice)) {
+        const { audio, contentType } = await eleven.sample(env.ELEVENLABS_API_KEY, voice);
+        return new Response(audio, { headers: { ...CORS, 'Content-Type': contentType } });
+      }
+      const { audio } = await tts(SAMPLE_TEXT, voice, env);
       return new Response(audio, { headers: { ...CORS, 'Content-Type': 'audio/mpeg' } });
     });
   }
 
   if (request.method === 'POST' && path === '/synthesize') {
     const { text, voice } = await readRequest(request);
-    const { audio } = await tts(text, voice);
+    const { audio } = await tts(text, voice, env);
     return new Response(audio, { headers: { ...CORS, 'Content-Type': 'audio/mpeg' } });
   }
 
   if (request.method === 'POST' && path === '/synthesize_with_timing') {
     const { text, voice, format } = await readRequest(request);
-    const { audio, boundaries } = await tts(text, voice);
+    const { audio, boundaries } = await tts(text, voice, env);
     return json({ audio: base64(audio), contentType: 'audio/mpeg', format, boundaries });
   }
 
@@ -107,7 +124,7 @@ async function route(request, ctx) {
     const kind = url.searchParams.get('format') || 'json';
     if (!['json', 'webvtt', 'srt'].includes(kind)) throw new HttpError(400, "Format must be 'json', 'webvtt' or 'srt'");
     const { text, voice, format } = await readRequest(request);
-    const { audio, boundaries } = await tts(text, voice);
+    const { audio, boundaries } = await tts(text, voice, env);
     if (kind === 'json') {
       const last = boundaries[boundaries.length - 1];
       return json({ text, voice, format, audio: base64(audio), contentType: 'audio/mpeg', boundaries,
@@ -136,7 +153,7 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     try {
-      return await route(request, ctx);
+      return await route(request, env || {}, ctx);
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;
       if (status === 500) console.error(err);

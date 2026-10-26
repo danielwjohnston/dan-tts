@@ -158,6 +158,7 @@
         <div>
           <label>Voice <span id="voice-count" style="font-weight:400;font-size:11px;color:var(--fg2);"></span></label>
           <select id="voice"></select>
+          <div id="provider-note" style="display:none;margin-top:4px;font-size:11px;color:var(--fg2);line-height:1.4;"></div>
         </div>
         <div>
           <label>Format <span id="format-note" style="font-weight:400;font-size:11px;color:var(--fg2);"></span></label>
@@ -398,15 +399,36 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     function friendlyName(shortName) {
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
+    // Edge voices have names like en-US-AriaNeural; provider voices carry their own display name
+    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices' };
+    const providerOf = (v) => v.provider || 'edge';
+    const displayName = (v) => providerOf(v) === 'edge' ? friendlyName(v.shortName) : (v.name || v.shortName);
+    const voiceDetail = (v) => providerOf(v) === 'edge' ? (v.shortName || '') : [PROVIDER_LABELS[providerOf(v)] || providerOf(v), v.localeName].filter(Boolean).join(' · ');
+    const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
+    const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let serverProviders = ['edge'];
+    function showProviderNote() {
+      const note = document.getElementById('provider-note');
+      const eleven = serverProviders.includes('elevenlabs');
+      note.style.display = eleven ? '' : 'none';
+      note.textContent = eleven
+        ? 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.'
+        : '';
+    }
 
     /* ---- Which server? The Worker has no ffmpeg, so only MP3 there ---- */
     async function probeServer(api) {
       let mp3Only = false;
+      let providers = ['edge'];
       try {
         const res = await fetch(`${api}/health`);
-        mp3Only = res.ok && (await res.json()).runtime === 'cloudflare-worker';
+        const health = res.ok ? await res.json() : {};
+        mp3Only = health.runtime === 'cloudflare-worker';
+        if (Array.isArray(health.providers)) providers = health.providers;
       } catch (e) { /* the voices request reports the error */ }
       if (api !== document.getElementById('api').value.trim().replace(/\/$/, '')) return; // changed meanwhile
+      serverProviders = providers;
+      showProviderNote();
       const formatSel = document.getElementById('format');
       [...formatSel.options].forEach(opt => {
         if (opt.value === 'mp3') return;
@@ -430,11 +452,17 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         allVoices = await res.json();
         if (api !== currentApi()) return;
         voiceSelect.innerHTML = '';
-        allVoices.forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.shortName || v.name;
-          opt.textContent = `${friendlyName(v.shortName)} (${v.gender || ''})`;
-          voiceSelect.appendChild(opt);
+        const providersSeen = [...new Set(allVoices.map(providerOf))];
+        providersSeen.forEach(provider => {
+          // One flat list for Edge alone; a labelled group per provider once there is more than one
+          const parent = providersSeen.length > 1 ? document.createElement('optgroup') : voiceSelect;
+          if (parent !== voiceSelect) { parent.label = PROVIDER_LABELS[provider] || provider; voiceSelect.appendChild(parent); }
+          allVoices.filter(v => providerOf(v) === provider).forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v.shortName || v.name;
+            opt.textContent = v.gender ? `${displayName(v)} (${v.gender})` : displayName(v);
+            parent.appendChild(opt);
+          });
         });
         if (favoriteVoice && allVoices.some(v => (v.shortName || v.name) === favoriteVoice)) {
           selectedVoiceName = favoriteVoice;
@@ -473,11 +501,18 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 
         const avatar = document.createElement('div');
         avatar.className = 'avatar ' + (v.gender === 'Female' ? 'female' : 'male');
-        avatar.textContent = friendlyName(sn).slice(0, 2).toUpperCase();
+        avatar.textContent = displayName(v).slice(0, 2).toUpperCase();
 
         const info = document.createElement('div');
         info.className = 'card-info';
-        info.innerHTML = `<div class="card-name">${friendlyName(sn)}${sn === favoriteVoice ? '<span class="fav-badge">FAV</span>' : ''}</div><div class="card-full">${sn}</div>`;
+        const nameEl = document.createElement('div');
+        nameEl.className = 'card-name';
+        nameEl.textContent = displayName(v);
+        if (sn === favoriteVoice) { const fav = document.createElement('span'); fav.className = 'fav-badge'; fav.textContent = 'FAV'; nameEl.appendChild(fav); }
+        const fullEl = document.createElement('div');
+        fullEl.className = 'card-full';
+        fullEl.textContent = voiceDetail(v);
+        info.append(nameEl, fullEl);
 
         const play = document.createElement('button');
         play.className = 'play-sample';
@@ -487,14 +522,14 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
           e.stopPropagation();
           if (!v.sampleUrl) return;
           try {
-            logEl.textContent = `Loading sample for ${friendlyName(sn)}...`;
+            logEl.textContent = `Loading sample for ${displayName(v)}...`;
             const res = await fetch(`${api}${v.sampleUrl}`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const blob = await res.blob();
             playerEl.src = URL.createObjectURL(blob);
             playerEl.style.display = '';
             await playerEl.play();
-            logEl.textContent = `Sample: ${friendlyName(sn)}`;
+            logEl.textContent = `Sample: ${displayName(v)}`;
           } catch (err) {
             console.error(err);
             logEl.textContent = 'Error: ' + err.message;
@@ -514,7 +549,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
           } else {
             favoriteVoice = sn;
             localStorage.setItem('tts-fav-voice', sn);
-            logEl.textContent = `${friendlyName(sn)} set as favorite.`;
+            logEl.textContent = `${nameFor(sn)} set as favorite.`;
           }
           renderGrid();
         };
@@ -664,7 +699,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 
     function smartFilename(text, voice, ext) {
       const slug = text.trim().split(/\s+/).slice(0, 5).join('-').replace(/[^a-zA-Z0-9-]/g, '').toLowerCase();
-      const vName = friendlyName(voice).replace(/\s+/g, '');
+      const vName = nameFor(voice).replace(/[^A-Za-z0-9_-]+/g, '') || 'voice';
       return `${slug || 'tts'}-${vName}.${ext}`;
     }
 
@@ -725,7 +760,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         playerEl.src = URL.createObjectURL(blob);
         playerEl.style.display = '';
         await playerEl.play();
-        logEl.textContent = `Preview: ${friendlyName(voice)}`;
+        logEl.textContent = `Preview: ${nameFor(voice)}`;
       } catch (err) {
         console.error(err);
         logEl.textContent = 'Error: ' + err.message;
@@ -882,7 +917,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       historyArr.forEach((h, i) => {
         const row = document.createElement('div');
         row.className = 'history-item';
-        row.innerHTML = `<span class="hi-voice">${friendlyName(h.voice)}</span><span class="hi-text">${h.text}</span>`;
+        row.innerHTML = `<span class="hi-voice">${escapeHtml(nameFor(h.voice))}</span><span class="hi-text">${escapeHtml(h.text)}</span>`;
         const playBtn = document.createElement('button');
         playBtn.className = 'btn btn-secondary';
         playBtn.textContent = '\u25b6';

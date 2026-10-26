@@ -1,4 +1,5 @@
 """API tests. Edge TTS and outbound HTTP are stubbed so these run offline."""
+import asyncio
 import socket
 
 import pytest
@@ -34,7 +35,7 @@ def client(monkeypatch):
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/health").json() == {"status": "ok", "providers": ["edge"]}
 
 
 def test_synthesize_mp3(client):
@@ -231,3 +232,154 @@ def test_extract_reads_first_article_when_there_is_no_main(client, monkeypatch):
     page = ("<html><body><div class='promo'><p>Buy now</p></div><article><p>One two three four five six.</p></article>"
             "<article><p>Second article text here.</p></article></body></html>")
     assert _extract(client, monkeypatch, page)["text"] == "One two three four five six."
+
+
+# ---- ElevenLabs provider ----
+
+ELEVEN_VOICE = "eleven:21m00Tcm4TlvDq8ikWAM"
+# "Hi there" spoken over 0.00s-0.95s
+ALIGNMENT = {
+    "characters": list("Hi there"),
+    "character_start_times_seconds": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+    "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.95],
+}
+
+
+def test_alignment_to_boundaries_groups_words_in_ticks():
+    assert main._alignment_to_boundaries(ALIGNMENT) == [
+        {"offset": 0, "duration": 2_000_000, "text": "Hi"},
+        {"offset": 3_000_000, "duration": 6_500_000, "text": "there"},
+    ]
+    assert main._alignment_to_boundaries({}) == []
+    assert main._alignment_to_boundaries({"characters": [" ", "\n"]}) == []
+
+
+@pytest.mark.parametrize("status, body, expected_status, words", [
+    (401, '{"detail": {"status": "invalid_api_key"}}', 502, "rejected the API key"),
+    (401, '{"detail": {"status": "quota_exceeded"}}', 429, "credits for this month are used up"),
+    (402, "{}", 429, "credits"),
+    (400, '{"detail": {"status": "max_character_limit_exceeded"}}', 422, "too long"),
+    (429, '{"detail": "slow down"}', 429, "rate-limiting"),
+    (500, "not json", 502, "HTTP 500"),
+])
+def test_eleven_errors_are_plain_language(status, body, expected_status, words):
+    exc = main._eleven_error(status, body)
+    assert exc.status_code == expected_status
+    assert words in exc.detail
+
+
+def test_eleven_synthesize_posts_with_timestamps(monkeypatch):
+    seen = {}
+
+    async def fake_request(method, path, json_body=None, timeout=60):
+        seen.update(method=method, path=path, body=json_body)
+        return {"audio_base64": "SUQzZWxldmVu", "alignment": ALIGNMENT}  # "ID3eleven"
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", fake_request)
+    audio, boundaries = asyncio.run(main._eleven_synthesize("Hi there", ELEVEN_VOICE))
+    assert seen["method"] == "POST"
+    assert seen["path"] == "/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/with-timestamps?output_format=mp3_44100_128"
+    assert seen["body"] == {"text": "Hi there", "model_id": main.ELEVENLABS_MODEL}
+    assert audio == b"ID3eleven"
+    assert [b["text"] for b in boundaries] == ["Hi", "there"]
+
+
+def test_eleven_synthesize_validates_before_network(monkeypatch):
+    async def must_not_run(*args, **kwargs):
+        raise AssertionError("no network call expected")
+
+    monkeypatch.setattr(main, "_eleven_request", must_not_run)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("hi", ELEVEN_VOICE))
+    assert e.value.status_code == 503
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("hi", "eleven:bad"))
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_synthesize("x" * (main.ELEVEN_MAX_CHARS + 1), ELEVEN_VOICE))
+    assert e.value.status_code == 422
+
+
+def test_eleven_voices_route_by_prefix(monkeypatch):
+    calls = []
+
+    async def fake_eleven(text, voice):
+        calls.append(voice)
+        return b"ID3eleven", [{"offset": 0, "duration": 1, "text": "hi"}]
+
+    monkeypatch.setattr(main, "_eleven_synthesize", fake_eleven)
+    assert asyncio.run(main.synthesize_mp3("hi", ELEVEN_VOICE)) == b"ID3eleven"
+    assert asyncio.run(main.synthesize_with_boundaries("hi", ELEVEN_VOICE))[0] == b"ID3eleven"
+    assert calls == [ELEVEN_VOICE, ELEVEN_VOICE]
+
+
+def test_health_lists_elevenlabs_when_key_is_set(client, monkeypatch):
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    assert client.get("/health").json() == {"status": "ok", "providers": ["edge", "elevenlabs"]}
+
+
+def test_voices_merge_edge_and_elevenlabs(monkeypatch):
+    async def fake_edge_list():
+        return [
+            {"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US", "LocaleName": "English (United States)", "Gender": "Female", "StyleList": ["chat"]},
+            {"Name": "Katja", "ShortName": "de-DE-KatjaNeural", "Locale": "de-DE", "LocaleName": "German", "Gender": "Female"},
+        ]
+
+    async def fake_eleven_voices():
+        return [{"name": "Adam", "shortName": "eleven:aaaaaaaaaaaa", "provider": "elevenlabs"}]
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_eleven_voices", fake_eleven_voices)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with TestClient(main.app) as c:
+        voices = c.get("/voices").json()
+    assert [(v["shortName"], v["provider"], v["sampleUrl"]) for v in voices] == [
+        ("en-US-AriaNeural", "edge", "/samples/en-US-AriaNeural"),
+        ("eleven:aaaaaaaaaaaa", "elevenlabs", "/samples/eleven:aaaaaaaaaaaa"),
+    ]
+
+
+def test_voices_keep_edge_list_when_elevenlabs_fails(monkeypatch):
+    async def fake_edge_list():
+        return [{"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US"}]
+
+    attempts = []
+
+    async def failing_eleven_voices():
+        attempts.append(1)
+        raise HTTPException(status_code=502, detail="ElevenLabs rejected the API key")
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_eleven_voices", failing_eleven_voices)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    with TestClient(main.app) as c:
+        assert [v["shortName"] for v in c.get("/voices").json()] == ["en-US-AriaNeural"]
+        c.get("/voices")
+    assert len(attempts) >= 2  # a failure is not cached
+
+
+def test_eleven_sample_serves_preview_clip(client, monkeypatch, tmp_path):
+    async def fake_voices():
+        return [{"shortName": ELEVEN_VOICE, "previewUrl": "https://cdn.example/a.mp3"}, {"shortName": "eleven:cccccccccccc", "previewUrl": ""}]
+
+    async def fake_bytes(url):
+        assert url == "https://cdn.example/a.mp3"
+        return b"ID3preview"
+
+    monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
+    monkeypatch.setattr(main, "list_voices", fake_voices)
+    monkeypatch.setattr(main, "_eleven_fetch_bytes", fake_bytes)
+    r = client.get(f"/samples/{ELEVEN_VOICE}")
+    assert r.status_code == 200
+    assert r.content == b"ID3preview"
+    assert (tmp_path / "eleven-21m00Tcm4TlvDq8ikWAM.mp3").exists()
+    assert client.get("/samples/eleven:cccccccccccc").status_code == 404
+    assert client.get("/samples/eleven:zzzzzzzzzzzz").status_code == 404
+    assert client.get("/samples/eleven:bad").status_code == 400
