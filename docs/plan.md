@@ -80,6 +80,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** a page reads with highlighting with the network off.
 
+**Status (2026-10-26):** researched, not built. [`docs/spikes/offline-voice.md`](spikes/offline-voice.md) compares the engines and recommends Piper through onnxruntime-web with its alignment patch for the first slice (fits Firefox's 200 MB limit, real time on one thread, native word timings), with Kokoro-82M as the better-sounding, permissively licensed second slice where WebGPU or the desktop app's native runtime is available. Two decisions are the owner's before building: the project's licence (none exists today; Piper is GPL-3.0) and the voice (public-domain `ljspeech`, `kristin` or `cori`, never the research-only `lessac` family).
+
 ### E. Public listing
 
 Only after A and D, per the terms decision: public builds default to a licensed or offline voice; Edge stays the self-hosted default. Firefox signing, Chrome Web Store, Calibre index, in that order.
