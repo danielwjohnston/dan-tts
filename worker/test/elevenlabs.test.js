@@ -93,7 +93,7 @@ test('sample serves the preview clip and 404s for unknown voices', async () => {
         { voice_id: 'cccccccccccc', name: 'Quiet', preview_url: '' },
       ] });
     }
-    if (url === 'https://cdn.example/adam.mp3') return new Response(AUDIO, { headers: { 'Content-Type': 'audio/mpeg' } });
+    if (url === 'https://cdn.example/adam.mp3') return new Response(AUDIO, { headers: { 'Content-Type': 'text/plain' } }); // as the real preview CDN labels them
     throw new Error(`unexpected ${url}`);
   };
   const { audio, contentType } = await sample('k', 'eleven:aaaaaaaaaaaa', { fetchImpl });

@@ -165,5 +165,7 @@ export async function sample(key, voice, { fetchImpl = globalThis.fetch } = {}) 
   if (!/^https:\/\//i.test(found.previewUrl)) throw new HttpError(502, 'ElevenLabs preview URL is not https');
   const res = await request(fetchImpl, found.previewUrl, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new HttpError(502, `ElevenLabs preview failed: HTTP ${res.status}`);
-  return { audio: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') || 'audio/mpeg' };
+  // The preview CDN labels the clips text/plain; a browser's audio element needs an audio type to play them
+  const ct = res.headers.get('content-type') || '';
+  return { audio: new Uint8Array(await res.arrayBuffer()), contentType: /^audio\//i.test(ct) ? ct : 'audio/mpeg' };
 }

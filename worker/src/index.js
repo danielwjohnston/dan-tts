@@ -127,6 +127,7 @@ async function route(request, env, ctx) {
     const voice = decodeURIComponent(sample[1]);
     if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
     if (eleven.isElevenVoice(voice) && !env.ELEVENLABS_API_KEY) throw new HttpError(503, 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)');
+    // variant "audio": samples cached before the content-type fix (text/plain previews) are not reused
     return cached(request, ctx, 7 * 86400, async () => {
       if (eleven.isElevenVoice(voice)) {
         const { audio, contentType } = await eleven.sample(env.ELEVENLABS_API_KEY, voice);
@@ -134,7 +135,7 @@ async function route(request, env, ctx) {
       }
       const { audio } = await tts(SAMPLE_TEXT, voice, env);
       return new Response(audio, { headers: { ...CORS, 'Content-Type': 'audio/mpeg' } });
-    });
+    }, { variant: 'audio' });
   }
 
   if (request.method === 'POST' && path === '/synthesize') {
