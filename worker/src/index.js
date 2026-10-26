@@ -61,23 +61,30 @@ const span = (b) => [Math.floor(b.offset / 10000), Math.floor((b.offset + b.dura
 
 // Cache by URL plus an optional variant (the configured providers), so a settings change misses the old
 // entry. "?refresh=1" skips the lookup and overwrites the entry, like the Python server's refresh.
-async function cached(request, ctx, ttlSeconds, make, { variant = '' } = {}) {
+// With ignoreQuery the query string is dropped from the key and refresh is not honoured, so a client
+// cannot make the Worker call upstream more than once per TTL by varying the URL. A response that
+// already names its own max-age (a short-lived error, say) keeps it; "no-store" is not cached at all.
+async function cached(request, ctx, ttlSeconds, make, { variant = '', ignoreQuery = false } = {}) {
   const cache = caches.default;
   const url = new URL(request.url);
-  const refresh = url.searchParams.get('refresh') === '1';
-  url.searchParams.delete('refresh');
+  const refresh = !ignoreQuery && url.searchParams.get('refresh') === '1';
+  if (ignoreQuery) url.search = ''; else url.searchParams.delete('refresh');
   if (variant) url.searchParams.set('variant', variant);
   const key = new Request(url.toString(), { method: 'GET' });
   const hit = refresh ? null : await cache.match(key);
   if (hit) return hit;
   const res = await make();
-  if (res.ok && res.headers.get('Cache-Control') !== 'no-store') {
+  const own = res.headers.get('Cache-Control');
+  if (res.ok && own !== 'no-store') {
     const copy = new Response(res.clone().body, res);
-    copy.headers.set('Cache-Control', `public, max-age=${ttlSeconds}`);
+    copy.headers.set('Cache-Control', /max-age=/.test(own || '') ? own : `public, max-age=${ttlSeconds}`);
     ctx.waitUntil(cache.put(key, copy));
   }
   return res;
 }
+
+// One upstream usage lookup at a time per isolate: concurrent cold misses share it
+let usageInFlight = null;
 
 async function route(request, env, ctx) {
   const url = new URL(request.url);
@@ -100,15 +107,19 @@ async function route(request, env, ctx) {
   }
 
   // What each provider costs right now. Edge has no quota; ElevenLabs reports this month's credits.
+  // A good answer is kept a minute, a failed lookup 15 seconds (same on the Python server).
   if (request.method === 'GET' && path === '/usage') {
     return cached(request, ctx, 60, async () => {
       const out = { edge: { unlimited: true } };
-      if (env.ELEVENLABS_API_KEY) {
-        try { out.elevenlabs = await eleven.usage(env.ELEVENLABS_API_KEY); }
-        catch (e) { out.elevenlabs = { error: e instanceof HttpError ? e.message : 'ElevenLabs usage unavailable' }; }
+      if (!env.ELEVENLABS_API_KEY) return json(out);
+      usageInFlight ||= eleven.usage(env.ELEVENLABS_API_KEY).finally(() => { usageInFlight = null; });
+      try { out.elevenlabs = await usageInFlight; }
+      catch (e) {
+        out.elevenlabs = { error: e instanceof HttpError ? e.message : 'ElevenLabs usage unavailable' };
+        return json(out, 200, { 'Cache-Control': 'public, max-age=15' });
       }
       return json(out);
-    }, { variant: providers(env).join(',') });
+    }, { variant: providers(env).join(','), ignoreQuery: true });
   }
 
   const sample = path.match(/^\/samples\/([^/]+)$/);

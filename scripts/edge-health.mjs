@@ -70,9 +70,11 @@ if (worker) {
     return summary.join(', ');
   });
   if (providers.includes('elevenlabs')) {
+    // Informational: a provider hiccup here must not raise the Edge alert (a rejected key already fails the voice-list check)
     await check('ElevenLabs credits (Worker /usage)', async () => {
       const u = (await fetchJson('/usage')).elevenlabs;
-      if (!u || u.error) throw new Error(u?.error || 'no usage reported');
+      if (!u) throw new Error('no usage reported');
+      if (u.error) return `not available right now (${u.error})`;
       return `${u.remaining} of ${u.limit} credits left${u.resetsAt ? `, resets ${u.resetsAt.slice(0, 10)}` : ''}`;
     });
   }

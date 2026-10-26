@@ -34,7 +34,7 @@ async function request(fetchImpl, url, init) {
 async function readJson(res) {
   try {
     const data = await res.json();
-    if (!data || typeof data !== 'object') throw new Error('not an object');
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('not an object');
     return data;
   } catch {
     throw new HttpError(502, 'ElevenLabs returned an unreadable response');
@@ -141,15 +141,18 @@ export async function usage(key, { fetchImpl = globalThis.fetch } = {}) {
   const res = await request(fetchImpl, `${API}/v1/user/subscription`, { headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(15000) });
   if (!res.ok) await fail(res);
   const s = await readJson(res);
-  const used = Number(s.character_count) || 0;
-  const limit = Number(s.character_limit) || 0;
+  // Whole numbers, never a throw, the same way the Python server coerces them
+  const num = (v) => Math.trunc(Number(v)) || 0;
+  const used = num(s.character_count);
+  const limit = num(s.character_limit);
+  const reset = num(s.next_character_count_reset_unix);
   return {
     provider: 'elevenlabs',
-    tier: s.tier || '',
+    tier: typeof s.tier === 'string' ? s.tier : '',
     used,
     limit,
     remaining: Math.max(0, limit - used),
-    resetsAt: s.next_character_count_reset_unix ? new Date(s.next_character_count_reset_unix * 1000).toISOString() : null,
+    resetsAt: reset > 0 ? new Date(reset * 1000).toISOString().replace(/\.\d+Z$/, 'Z') : null,
   };
 }
 

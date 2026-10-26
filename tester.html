@@ -457,7 +457,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
         const minutes = Math.round(u.remaining / 1000);
         document.getElementById('provider-note').textContent =
-          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech).${reset} Edge voices have no quota.`;
+          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset} Edge voices have no quota.`;
       } catch (e) { /* the generic note stays */ }
     }
 
