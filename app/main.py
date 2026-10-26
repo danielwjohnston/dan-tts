@@ -225,6 +225,45 @@ def _alignment_to_boundaries(alignment: dict) -> list[dict]:
     return out
 
 
+_eleven_usage_cache: Optional[tuple[float, dict]] = None
+
+
+async def _eleven_usage() -> dict:
+    """This month's credit use. The free plan counts characters, so credits and characters are the same number."""
+    s = await _eleven_request("GET", "/v1/user/subscription", timeout=15)
+    used = int(s.get("character_count") or 0)
+    limit = int(s.get("character_limit") or 0)
+    reset = s.get("next_character_count_reset_unix")
+    return {
+        "provider": "elevenlabs",
+        "tier": s.get("tier") or "",
+        "used": used,
+        "limit": limit,
+        "remaining": max(0, limit - used),
+        "resetsAt": datetime.fromtimestamp(reset, tz=timezone.utc).isoformat().replace("+00:00", "Z") if reset else None,
+    }
+
+
+async def _usage() -> dict:
+    """What each provider costs right now; a failed ElevenLabs lookup is reported, not raised. Cached for a minute."""
+    global _eleven_usage_cache
+    out: dict = {"edge": {"unlimited": True}}
+    if not ELEVENLABS_API_KEY:
+        return out
+    now = asyncio.get_running_loop().time()
+    if _eleven_usage_cache and now - _eleven_usage_cache[0] < 60:
+        out["elevenlabs"] = _eleven_usage_cache[1]
+        return out
+    try:
+        out["elevenlabs"] = await _eleven_usage()
+        _eleven_usage_cache = (now, out["elevenlabs"])
+    except HTTPException as exc:
+        out["elevenlabs"] = {"error": exc.detail}
+    except Exception:
+        out["elevenlabs"] = {"error": "ElevenLabs usage unavailable"}
+    return out
+
+
 async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
     if not ELEVEN_ID_RE.match(voice):
         raise HTTPException(status_code=400, detail="Invalid voice name")
@@ -757,3 +796,8 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
 @app.get("/health")
 async def health():
     return {"status": "ok", "providers": _providers()}
+
+
+@app.get("/usage")
+async def usage():
+    return await _usage()

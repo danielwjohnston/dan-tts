@@ -99,6 +99,18 @@ async function route(request, env, ctx) {
     }, { variant: providers(env).join(',') });
   }
 
+  // What each provider costs right now. Edge has no quota; ElevenLabs reports this month's credits.
+  if (request.method === 'GET' && path === '/usage') {
+    return cached(request, ctx, 60, async () => {
+      const out = { edge: { unlimited: true } };
+      if (env.ELEVENLABS_API_KEY) {
+        try { out.elevenlabs = await eleven.usage(env.ELEVENLABS_API_KEY); }
+        catch (e) { out.elevenlabs = { error: e instanceof HttpError ? e.message : 'ElevenLabs usage unavailable' }; }
+      }
+      return json(out);
+    }, { variant: providers(env).join(',') });
+  }
+
   const sample = path.match(/^\/samples\/([^/]+)$/);
   if (request.method === 'GET' && sample) {
     const voice = decodeURIComponent(sample[1]);

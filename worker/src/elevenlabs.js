@@ -133,6 +133,26 @@ export async function synthesize(text, voice, { key, model = DEFAULT_MODEL, fetc
   return { audio, boundaries: alignmentToBoundaries(data.alignment || data.normalized_alignment) };
 }
 
+/**
+ * This month's credit use, for /usage. Listing it costs nothing. The free plan counts characters,
+ * so "credits" and "characters" are the same number here.
+ */
+export async function usage(key, { fetchImpl = globalThis.fetch } = {}) {
+  const res = await request(fetchImpl, `${API}/v1/user/subscription`, { headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) await fail(res);
+  const s = await readJson(res);
+  const used = Number(s.character_count) || 0;
+  const limit = Number(s.character_limit) || 0;
+  return {
+    provider: 'elevenlabs',
+    tier: s.tier || '',
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    resetsAt: s.next_character_count_reset_unix ? new Date(s.next_character_count_reset_unix * 1000).toISOString() : null,
+  };
+}
+
 /** The voice's preview clip, for /samples/eleven:<id>. */
 export async function sample(key, voice, { fetchImpl = globalThis.fetch } = {}) {
   const voices = await listVoices(key, { fetchImpl });

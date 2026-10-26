@@ -437,13 +437,28 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
+    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
     function showProviderNote() {
       const note = document.getElementById('provider-note');
       const eleven = serverProviders.includes('elevenlabs');
       note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven
-        ? 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.'
-        : '';
+      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
+      if (eleven) showUsage();
+    }
+    /* Live credit count from /usage, replacing the generic note when the server can report it */
+    async function showUsage() {
+      const api = currentApi();
+      try {
+        const res = await fetch(`${api}/usage`);
+        if (!res.ok || api !== currentApi()) return;
+        const u = (await res.json()).elevenlabs;
+        if (!u || u.error || !u.limit) return;
+        const n = (x) => x.toLocaleString();
+        const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
+        const minutes = Math.round(u.remaining / 1000);
+        document.getElementById('provider-note').textContent =
+          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech).${reset} Edge voices have no quota.`;
+      } catch (e) { /* the generic note stays */ }
     }
 
     /* ---- Which server? The Worker has no ffmpeg, so only MP3 there ---- */

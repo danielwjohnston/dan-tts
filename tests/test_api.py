@@ -495,3 +495,31 @@ def test_eleven_preview_download_is_guarded(monkeypatch):
     with pytest.raises(HTTPException) as e:
         asyncio.run(main._eleven_fetch_bytes("https://10.0.0.1/clip.mp3"))
     assert e.value.status_code == 502
+
+
+def test_usage_reports_edge_unlimited_and_elevenlabs_credits(client, monkeypatch):
+    assert client.get("/usage").json() == {"edge": {"unlimited": True}}
+
+    async def fake_request(method, path, json_body=None, timeout=60):
+        assert (method, path) == ("GET", "/v1/user/subscription")
+        return {"tier": "free", "character_count": 150, "character_limit": 10000, "next_character_count_reset_unix": 1762128000}
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", fake_request)
+    monkeypatch.setattr(main, "_eleven_usage_cache", None)
+    assert client.get("/usage").json() == {
+        "edge": {"unlimited": True},
+        "elevenlabs": {"provider": "elevenlabs", "tier": "free", "used": 150, "limit": 10000, "remaining": 9850, "resetsAt": "2025-11-03T00:00:00Z"},
+    }
+
+
+def test_usage_reports_a_failed_lookup_without_failing(client, monkeypatch):
+    async def rejected(method, path, json_body=None, timeout=60):
+        raise main._eleven_error(401, '{"detail": {"status": "invalid_api_key"}}')
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", rejected)
+    monkeypatch.setattr(main, "_eleven_usage_cache", None)
+    r = client.get("/usage")
+    assert r.status_code == 200
+    assert "rejected the API key" in r.json()["elevenlabs"]["error"]

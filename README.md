@@ -36,7 +36,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use. The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
+Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
 
 ## Usage
 

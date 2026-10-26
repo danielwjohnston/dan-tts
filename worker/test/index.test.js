@@ -163,3 +163,23 @@ test('ELEVENLABS_MODEL changes the model sent to ElevenLabs', async (t) => {
   await callWith({ ...ELEVEN_ENV, ELEVENLABS_MODEL: 'eleven_turbo_v2_5' }, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'eleven:aaaaaaaaaaaa' }) });
   assert.strictEqual(body.model_id, 'eleven_turbo_v2_5');
 });
+
+test('/usage reports Edge as unlimited and ElevenLabs credits when configured', async (t) => {
+  stubNetwork(t);
+  const realFetch = globalThis.fetch;
+  let subscriptionStatus = 200;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://api.elevenlabs.io/v1/user/subscription') {
+      return new Response(JSON.stringify(subscriptionStatus === 200 ? { tier: 'free', character_count: 150, character_limit: 10000 } : { detail: { status: 'invalid_api_key' } }), { status: subscriptionStatus, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetch(input, init);
+  };
+  assert.deepStrictEqual(await callWith({}, '/usage').then((r) => r.json()), { edge: { unlimited: true } });
+  const withKey = await callWith(ELEVEN_ENV, '/usage').then((r) => r.json());
+  assert.deepStrictEqual(withKey.elevenlabs, { provider: 'elevenlabs', tier: 'free', used: 150, limit: 10000, remaining: 9850, resetsAt: null });
+  subscriptionStatus = 401;
+  const failed = await callWith(ELEVEN_ENV, '/usage');
+  assert.strictEqual(failed.status, 200);
+  assert.match((await failed.json()).elevenlabs.error, /rejected the API key/);
+});

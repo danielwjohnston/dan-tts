@@ -84,6 +84,8 @@ Only after A and D, per the terms decision: public builds default to a licensed 
 
 The health check lists voices from every configured provider (listing costs no credits); a `/usage` view shows remaining credits where the provider exposes them; defaults live in one place on each server.
 
+**Status (2026-10-26):** `/usage` exists on both servers (Edge: no quota; ElevenLabs: used, limit, remaining and reset date, cached a minute, a failed lookup reported rather than raised); the tester shows the live count under the voice picker and the health check logs it when a key is configured.
+
 ## 4. Order and size
 
 1. **A, ElevenLabs** (now; a few days of work, one PR). 2. **F** alongside A. 3. **A, Azure** (same engine, needs a key). 4. **B** (one PR for the module and tester, one for the extension). 5. **C**. 6. **D** (largest; a spike first). 7. **E**.
