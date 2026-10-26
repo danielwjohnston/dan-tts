@@ -43,6 +43,10 @@
       "description": "Read the selection, or the whole page"
     }
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
   "optional_host_permissions": [
     "https://*/*",
     "http://*/*"

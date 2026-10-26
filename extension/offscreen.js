@@ -3,6 +3,7 @@
 // block audio). Firefox has no offscreen documents, so there the background page imports
 // this module and drives it directly (handleCommand / setEventSink).
 import { synthesize } from './engine/tts.js';
+import { synthesizeServer, isServerVoice } from './engine/server.js';
 
 const audio = document.getElementById('audio') || new Audio();
 const openSocket = (url) => new WebSocket(url);
@@ -10,6 +11,7 @@ const openSocket = (url) => new WebSocket(url);
 let session = 0;       // bumps on every load/stop so stale async work is ignored
 let chunks = [];
 let voice = 'en-US-AriaNeural';
+let server;            // voice server setting from the reader (undefined = the default server)
 let rate = 1;
 let current = -1;
 let cache = new Map(); // chunk index -> Promise<{ url, boundaries }>
@@ -26,9 +28,11 @@ export function setEventSink(fn) { emit = fn; }
 function synth(i) {
   if (!cache.has(i)) {
     const gen = cacheGen;
-    const p = synthesize(chunks[i], { voice, openSocket }).then(({ audio: bytes, boundaries }) => {
+    // Provider voices ("eleven:…") come from the voice server; everything else is Edge, spoken directly
+    const run = isServerVoice(voice) ? synthesizeServer(chunks[i], { voice, server }) : synthesize(chunks[i], { voice, openSocket });
+    const p = run.then(({ audio: bytes, boundaries, contentType }) => {
       if (gen !== cacheGen) return null;
-      return { url: URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' })), boundaries };
+      return { url: URL.createObjectURL(new Blob([bytes], { type: contentType || 'audio/mpeg' })), boundaries };
     });
     p.catch(() => cache.delete(i)); // allow a retry
     cache.set(i, p);
@@ -50,7 +54,9 @@ async function playChunk(i, startTicks = 0) {
   let r;
   try { r = await synth(i); } catch (e) { toTab('error', { message: e.message }); return; }
   if (mine !== session || !r) return;
-  if (i + 1 < chunks.length) synth(i + 1).catch(() => {}); // prefetch the next one
+  // Prefetch the next chunk. Server voices cost credits, so for those it waits until this chunk is
+  // mostly played (see the ticker), rather than paying for a chunk the listener may never reach.
+  if (i + 1 < chunks.length && !isServerVoice(voice)) synth(i + 1).catch(() => {});
   // Free audio we won't replay soon
   if (cache.has(i - 2)) { cache.get(i - 2).then((old) => old && URL.revokeObjectURL(old.url)); cache.delete(i - 2); }
   boundaries = r.boundaries;
@@ -75,6 +81,7 @@ function startTicker() {
       if (boundaries[k].offset <= t) idx = k; else break;
     }
     if (idx !== lastWord) { lastWord = idx; toTab('word', { chunk: current, word: idx }); }
+    if (isServerVoice(voice) && current + 1 < chunks.length && audio.duration && audio.currentTime > audio.duration * 0.7) synth(current + 1).catch(() => {});
   }, 40);
 }
 function stopTicker() { clearInterval(ticker); ticker = null; }
@@ -89,6 +96,7 @@ const commands = {
     clearCache();
     chunks = msg.chunks;
     voice = msg.voice || voice;
+    server = msg.server;
     rate = msg.rate || rate;
     playChunk(msg.startChunk || 0, msg.startTicks || 0);
   },
@@ -111,6 +119,7 @@ const commands = {
   rate(msg) { rate = msg.rate; audio.playbackRate = rate; },
   voice(msg) {
     voice = msg.voice;
+    if ('server' in msg) server = msg.server;
     const at = current;
     session++;
     clearCache();

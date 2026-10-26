@@ -68,6 +68,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** an end-to-end check reads a page with an `eleven:` voice when a key is configured, and skips cleanly when it isn't.
 
+**Status (2026-10-26):** built. `engine/src/server.js` (shared with the extension and the desktop app) lists provider voices from `/voices` and speaks through `/synthesize_with_timing`; the reader groups them under their provider, the player routes by the id prefix and prefetches a paid chunk only once the current one is mostly played; the extension has an options page for the server (empty = Edge only); the desktop app calls the server through its main process. The Chromium end-to-end test reads a page with an `eleven:` voice from a stand-in server, so no key is needed in CI.
+
 ### D. Offline voice
 
 **Question:** is an on-device voice good enough that people keep it on?

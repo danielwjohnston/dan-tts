@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>dan-tts Reader settings</title>
+  <style>
+    body { font: 14px/1.45 system-ui, sans-serif; margin: 16px; max-width: 480px; color: #222; }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    label { display: block; font-weight: 600; margin-top: 12px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin-top: 4px; font: inherit; }
+    p { color: #555; margin: 8px 0 0; }
+    button { margin-top: 12px; padding: 6px 14px; font: inherit; }
+    #saved { margin-left: 8px; color: #2a7d4f; }
+    @media (prefers-color-scheme: dark) { body { background: #1e1e1e; color: #eee; } p { color: #bbb; } input { background: #2a2a2a; color: #eee; border: 1px solid #555; } }
+  </style>
+</head>
+<body>
+  <h2>dan-tts Reader</h2>
+  <label for="server">Voice server</label>
+  <input id="server" type="url" placeholder="https://dan-tts.macdaddydwj.workers.dev" spellcheck="false" autocomplete="off">
+  <p>Edge voices are spoken straight from your browser and never go through a server. Voices from other providers (for example ElevenLabs) come from this server, which holds the provider's key; the text being read is sent to it, and the provider's credits are used. Leave the field empty to list Edge voices only.</p>
+  <button id="save">Save</button><span id="saved" role="status"></span>
+  <script src="options.js"></script>
+</body>
+</html>

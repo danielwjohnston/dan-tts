@@ -5,7 +5,10 @@
   window.__danTts = true;
 
   const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-  const settings = { voice: 'en-US-AriaNeural', rate: 1 };
+  const settings = { voice: 'en-US-AriaNeural', rate: 1, server: undefined }; // server: unset = the default voice server, '' = none
+  const PROVIDER_LABELS = { elevenlabs: 'ElevenLabs' };
+  const isServerVoice = (v) => /^[a-z][a-z0-9]*:/i.test(v || '');
+  const voiceLabel = (v) => isServerVoice(v) ? 'Server voice' : v;
   const toPlayer = (cmd, data = {}) => chrome.runtime.sendMessage({ target: 'player', cmd, ...data });
 
   // ---- State ----
@@ -77,7 +80,7 @@
         <button class="play" title="Play/Pause (Space)">▶</button>
         <button class="next" title="Next paragraph (→)">⏭</button>
         <select class="speed" title="Speed"></select>
-        <select class="voice" title="Voice"><option>${settings.voice}</option></select>
+        <select class="voice" title="Voice"><option>${voiceLabel(settings.voice)}</option></select>
         <span class="status"></span>
         <button class="restart" title="Start from the beginning">⟲</button>
         <button class="close" title="Close (Esc)">✕</button>
@@ -90,10 +93,14 @@
   document.documentElement.appendChild(host);
 
   // ---- Settings ----
-  const ready = chrome.storage.sync.get(['voice', 'rate']).then((s) => {
+  const ready = chrome.storage.sync.get(['voice', 'rate', 'server']).then((s) => {
     Object.assign(settings, Object.fromEntries(Object.entries(s).filter(([, v]) => v != null)));
     speedSel.value = String(settings.rate);
-    voiceSel.innerHTML = `<option value="${settings.voice}">${settings.voice}</option>`;
+    voiceSel.innerHTML = `<option value="${settings.voice}">${voiceLabel(settings.voice)}</option>`;
+  });
+  // The settings page may change the voice server while a page is open
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'sync' && 'server' in changes) { settings.server = changes.server.newValue; voicesLoaded = false; }
   });
 
   let voicesLoaded = false;
@@ -102,16 +109,27 @@
     const res = await chrome.runtime.sendMessage({ target: 'background', cmd: 'voices' });
     if (!res?.voices) return;
     voicesLoaded = true;
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const lang = (navigator.language || 'en-US').split('-')[0];
-    const byLocale = {};
-    for (const v of res.voices) (byLocale[v.LocaleName || v.Locale] ??= []).push(v);
+    // Provider voices (from the voice server) in their own groups first, then Edge voices by language
+    const byProvider = {}, byLocale = {};
+    for (const v of res.voices) {
+      if (v.Provider) (byProvider[v.Provider] ??= []).push(v);
+      else (byLocale[v.LocaleName || v.Locale || 'Other'] ??= []).push(v);
+    }
     const locales = Object.keys(byLocale).sort((a, b) => {
-      const pa = byLocale[a][0].Locale.startsWith(lang) ? 0 : 1, pb = byLocale[b][0].Locale.startsWith(lang) ? 0 : 1;
+      const pa = (byLocale[a][0].Locale || '').startsWith(lang) ? 0 : 1, pb = (byLocale[b][0].Locale || '').startsWith(lang) ? 0 : 1;
       return pa - pb || a.localeCompare(b);
     });
-    const label = (v) => `${v.ShortName.split('-').slice(2).join('-').replace(/Neural$/, '').replace(/Multilingual$/, ' (multilingual)')} · ${v.Gender[0]}`;
-    voiceSel.innerHTML = locales.map((loc) => `<optgroup label="${loc}">${byLocale[loc].map((v) =>
-      `<option value="${v.ShortName}">${label(v)}</option>`).join('')}</optgroup>`).join('');
+    const gender = (v) => (v.Gender ? ` · ${v.Gender[0]}` : '');
+    const label = (v) => v.Provider
+      ? `${v.FriendlyName || v.ShortName}${gender(v)}`
+      : `${v.ShortName.split('-').slice(2).join('-').replace(/Neural$/, '').replace(/Multilingual$/, ' (multilingual)')}${gender(v)}`;
+    const group = (name, voices) => `<optgroup label="${esc(name)}">${voices.map((v) => `<option value="${esc(v.ShortName)}">${esc(label(v))}</option>`).join('')}</optgroup>`;
+    voiceSel.innerHTML = [
+      ...Object.keys(byProvider).sort().map((p) => group(`${PROVIDER_LABELS[p] || p} · via your server`, byProvider[p])),
+      ...locales.map((loc) => group(loc, byLocale[loc])),
+    ].join('');
     voiceSel.value = settings.voice;
   }
 
@@ -431,7 +449,7 @@
       }
       saveProgress({ chunk: startChunk, ticks: startTicks, wordsDone: chunkStart[startChunk] || 0, done: false });
     }
-    toPlayer('load', { chunks, voice: settings.voice, rate: settings.rate, startChunk, startTicks });
+    toPlayer('load', { chunks, voice: settings.voice, rate: settings.rate, server: settings.server, startChunk, startTicks });
     // Keep the background alive while reading (Firefox plays audio there and suspends it after ~30 s idle)
     clearInterval(keepAlive);
     keepAlive = setInterval(() => chrome.runtime.sendMessage({ target: 'background', cmd: 'keepalive' }).catch(() => {}), 10000);
@@ -490,7 +508,7 @@
     settings.voice = voiceSel.value;
     chrome.storage.sync.set({ voice: settings.voice });
     alignments = {};
-    toPlayer('voice', { voice: settings.voice });
+    toPlayer('voice', { voice: settings.voice, server: settings.server });
   });
   article.addEventListener('click', (e) => {
     const w = e.target.closest('.w');

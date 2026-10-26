@@ -77,12 +77,18 @@ app.whenReady().then(async () => {
   // No camera, microphone, notifications or the like are ever needed
   session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
 
-  // Download a web page or PDF on the renderer's behalf (pages can't fetch other sites).
-  ipcMain.handle('dan:fetch', async (_event, url) => {
+  // Download a web page or PDF, or call the voice server, on the renderer's behalf (pages can't
+  // fetch other sites). GET by default; a POST carries a small JSON body (the text to speak).
+  ipcMain.handle('dan:fetch', async (_event, url, init) => {
     let u;
     try { u = new URL(url); } catch { throw new Error('Not a valid web address'); }
     if (!/^https?:$/.test(u.protocol)) throw new Error('Only http:// and https:// addresses can be opened');
-    const res = await net.fetch(u.toString(), { headers: { 'User-Agent': `Mozilla/5.0 (compatible; dan-tts-desktop/${app.getVersion()})` } });
+    const method = init?.method === 'POST' ? 'POST' : 'GET';
+    const payload = method === 'POST' && typeof init?.body === 'string' ? init.body : undefined;
+    if (payload !== undefined && payload.length > 1024 * 1024) throw new Error('That request is too large');
+    const headers = { 'User-Agent': `Mozilla/5.0 (compatible; dan-tts-desktop/${app.getVersion()})` };
+    if (method === 'POST') headers['Content-Type'] = typeof init?.headers?.['content-type'] === 'string' ? init.headers['content-type'] : 'application/json';
+    const res = await net.fetch(u.toString(), { method, headers, body: payload });
     const length = Number(res.headers.get('content-length') || 0);
     if (length > MAX_DOWNLOAD) throw new Error('That file is too large (over 100 MB)');
     const body = new Uint8Array(await res.arrayBuffer());
