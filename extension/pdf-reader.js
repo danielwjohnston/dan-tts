@@ -45,7 +45,7 @@ async function ocrCache(key, value) {
 async function ocrPages(doc, cacheKey) {
   const cached = await ocrCache(cacheKey).catch(() => null);
   if (cached) return cached;
-  setStatus('Scanned PDF: loading text recognition (first time downloads ~4 MB of English language data)…');
+  setStatus('Scanned PDF: loading text recognition…');
   // Surface engine failures instead of hanging on "loading…"
   let failEngine;
   const engineFailed = new Promise((_, reject) => { failEngine = reject; });
@@ -53,6 +53,11 @@ async function ocrPages(doc, cacheKey) {
   const worker = await guard(Tesseract.createWorker('eng', 1, {
     workerPath: chrome.runtime.getURL('lib/tesseract/worker.min.js'),
     corePath: chrome.runtime.getURL('lib/tesseract/tesseract-core-simd-lstm.wasm.js'),
+    // The English language data ships with the extension (lib/tesseract/eng.traineddata.gz), so
+    // nothing is downloaded: a stalled CDN fetch used to leave the reader on "loading…" for good
+    langPath: chrome.runtime.getURL('lib/tesseract'),
+    gzip: true,
+    cacheMethod: 'none', // local already; don't copy 5 MB into IndexedDB
     workerBlobURL: false, // extension CSP doesn't allow blob: workers
     errorHandler: (e) => failEngine(new Error(`text recognition failed: ${e?.message || e}`)),
   }));
