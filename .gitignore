@@ -9,6 +9,7 @@ build/
 .env
 node_modules/
 .wrangler/
+.dev.vars*
 engine/examples/extension/engine/
 _site/
 desktop/app/

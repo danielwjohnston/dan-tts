@@ -7,6 +7,9 @@ Dan's TTS Project (FastAPI)
 import asyncio
 import base64
 import ipaddress
+import json
+import math
+import os
 import re
 import socket
 import subprocess
@@ -14,7 +17,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 import edge_tts
@@ -36,9 +39,19 @@ SAMPLES_DIR = BASE_DIR / "samples"
 MAX_TEXT_CHARS = 20000
 MAX_FETCH_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
-VOICE_NAME_RE = re.compile(r"^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$")
+VOICE_NAME_RE = re.compile(r"^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$")  # Edge voices
+
+# ElevenLabs as a second voice provider (same rules as worker/src/elevenlabs.js). Voice ids are
+# "eleven:<voice_id>" so requests route by prefix; the key lives on the server only.
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+ELEVEN_PREFIX = "eleven:"
+ELEVEN_ID_RE = re.compile(r"^eleven:[A-Za-z0-9_-]{8,64}\Z")  # \Z: "$" would accept a trailing newline
+ELEVEN_MAX_CHARS = 5000  # per request; the tester splits long text into paragraphs anyway
+ELEVEN_API = "https://api.elevenlabs.io"
 
 _voice_cache: Optional[List[Dict]] = None
+_eleven_voice_cache: Optional[List[Dict]] = None
 
 app = FastAPI(title="Dan's TTS Project", version="0.1.0")
 app.add_middleware(
@@ -74,7 +87,170 @@ class ExtractTextRequest(BaseModel):
     url: str = Field(..., description="URL to fetch and extract text from")
 
 
+def _valid_voice(voice: str) -> bool:
+    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice))
+
+
+def _providers() -> list[str]:
+    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else [])
+
+
+def _eleven_error(status: int, body: str) -> HTTPException:
+    """A failed ElevenLabs response as an HTTPException with a plain message."""
+    try:
+        detail = json.loads(body).get("detail")
+    except Exception:
+        detail = None
+    code = detail.get("status") if isinstance(detail, dict) else None
+    message = detail.get("message") if isinstance(detail, dict) else (detail if isinstance(detail, str) else "")
+    if status == 401 and code != "quota_exceeded":
+        return HTTPException(status_code=502, detail=f"ElevenLabs rejected the API key{f' ({message})' if message else ''}: check ELEVENLABS_API_KEY on the server")
+    if code == "quota_exceeded" or status == 402:
+        return HTTPException(status_code=429, detail="ElevenLabs credits for this month are used up. Edge voices still work; credits reset monthly")
+    if code == "max_character_limit_exceeded":
+        return HTTPException(status_code=422, detail=f"Text is too long for ElevenLabs in one request (limit about {ELEVEN_MAX_CHARS} characters)")
+    if status == 429:
+        return HTTPException(status_code=429, detail="ElevenLabs is rate-limiting requests; try again in a moment")
+    return HTTPException(status_code=502, detail=f"ElevenLabs error: HTTP {status}" + (f" ({message})" if message else ""))
+
+
+async def _eleven_request(method: str, path: str, json_body: Optional[dict] = None, timeout: int = 60) -> dict:
+    """One call to ElevenLabs, parsed as JSON."""
+    headers = {"xi-api-key": ELEVENLABS_API_KEY, "Accept": "application/json"}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout), headers=headers) as session:
+            async with session.request(method, f"{ELEVEN_API}{path}", json=json_body) as resp:
+                if resp.status != 200:
+                    raise _eleven_error(resp.status, await resp.text())
+                try:
+                    data = await resp.json(content_type=None)
+                except (ValueError, aiohttp.ContentTypeError):
+                    data = None
+                if not isinstance(data, dict):
+                    raise HTTPException(status_code=502, detail="ElevenLabs returned an unreadable response")
+                return data
+    except aiohttp.ClientError as exc:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs error: {exc}")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="ElevenLabs timed out")
+
+
+async def _eleven_fetch_bytes(url: str) -> bytes:
+    """Download a preview clip. The URL comes from the provider's listing, so it gets the same public-host
+    check as Load from URL, must be https, may not redirect, and is capped in size."""
+    if urlparse(url).scheme != "https":
+        raise HTTPException(status_code=502, detail="ElevenLabs preview URL is not https")
+    try:
+        await _assert_public_host(url)
+    except HTTPException:
+        raise HTTPException(status_code=502, detail="ElevenLabs preview URL points at a host this server will not fetch")
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+            async with session.get(url, allow_redirects=False) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: HTTP {resp.status}")
+                body = await resp.content.read(MAX_FETCH_BYTES + 1)
+                if len(body) > MAX_FETCH_BYTES:
+                    raise HTTPException(status_code=502, detail="ElevenLabs preview clip is too large")
+                return body
+    except aiohttp.ClientError as exc:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: {exc}")
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="ElevenLabs preview timed out")
+
+
+def _title(s: str) -> str:
+    return s[:1].upper() + s[1:] if s else ""
+
+
+async def _eleven_voices() -> list[dict]:
+    """The account's voices, in the same shape as the Edge entries. Listing costs no credits."""
+    out: list[dict] = []
+    token = None
+    for _ in range(10):
+        data = await _eleven_request("GET", "/v2/voices?page_size=100" + (f"&next_page_token={quote(token)}" if token else ""), timeout=20)
+        for v in data.get("voices") or []:
+            labels = v.get("labels") or {}
+            out.append({
+                "name": v.get("name") or v.get("voice_id"),
+                "shortName": f"{ELEVEN_PREFIX}{v.get('voice_id')}",
+                "locale": labels.get("language") or "",
+                "localeName": " · ".join(_title(x) for x in (labels.get("accent"), labels.get("age"), labels.get("use_case")) if x),
+                "gender": _title(labels.get("gender") or ""),
+                "styleList": [],
+                "provider": "elevenlabs",
+                "category": v.get("category") or "",
+                "previewUrl": v.get("preview_url") or "",
+            })
+        if not data.get("has_more") or not data.get("next_page_token"):
+            break
+        token = data["next_page_token"]
+    return out
+
+
+# An alignment entry that is only whitespace separates words. Same explicit class as worker/src/elevenlabs.js
+# (not str.isspace(), which disagrees with JavaScript's \s on a few code points), so both servers split alike.
+_WHITESPACE_ENTRY = re.compile("[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+")
+
+
+def _ticks(seconds: float) -> int:
+    return math.floor(seconds * 1e7 + 0.5)  # half-up, like the Worker's Math.round-style rounding
+
+
+def _alignment_to_boundaries(alignment: dict) -> list[dict]:
+    """Per-character times → one boundary per whitespace-separated word, in 100 ns ticks."""
+    chars = alignment.get("characters") or []
+    starts = alignment.get("character_start_times_seconds") or []
+    ends = alignment.get("character_end_times_seconds") or []
+
+    def is_space(entry) -> bool:
+        return bool(_WHITESPACE_ENTRY.fullmatch(str(entry)))
+
+    out = []
+    i = 0
+    while i < len(chars):
+        while i < len(chars) and is_space(chars[i]):
+            i += 1
+        if i >= len(chars):
+            break
+        first = i
+        text = ""
+        while i < len(chars) and not is_space(chars[i]):
+            text += str(chars[i])
+            i += 1
+        start_s = starts[first] if first < len(starts) else 0
+        offset = _ticks(start_s or 0)
+        end_s = ends[i - 1] if i - 1 < len(ends) and ends[i - 1] is not None else start_s
+        out.append({"offset": offset, "duration": max(0, _ticks(end_s or 0) - offset), "text": text})
+    return out
+
+
+async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
+    if not ELEVEN_ID_RE.match(voice):
+        raise HTTPException(status_code=400, detail="Invalid voice name")
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")
+    if len(text) > ELEVEN_MAX_CHARS:
+        raise HTTPException(status_code=422, detail=f"Text is limited to {ELEVEN_MAX_CHARS} characters per request for ElevenLabs voices")
+    voice_id = voice[len(ELEVEN_PREFIX):]
+    data = await _eleven_request(
+        "POST", f"/v1/text-to-speech/{quote(voice_id)}/with-timestamps?output_format=mp3_44100_128",
+        json_body={"text": text, "model_id": ELEVENLABS_MODEL},
+    )
+    if not isinstance(data.get("audio_base64"), str) or not data["audio_base64"]:
+        raise HTTPException(status_code=502, detail="ElevenLabs returned no audio")
+    try:
+        audio = base64.b64decode(data["audio_base64"], validate=True)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=502, detail="ElevenLabs returned unreadable audio")
+    alignment = data.get("alignment") or data.get("normalized_alignment") or {}
+    return audio, _alignment_to_boundaries(alignment if isinstance(alignment, dict) else {})
+
+
 async def synthesize_mp3(text: str, voice: str) -> bytes:
+    if voice.startswith(ELEVEN_PREFIX):
+        audio, _ = await _eleven_synthesize(text, voice)
+        return audio
     communicator = edge_tts.Communicate(text, voice=voice)
     audio_chunks = []
     async for chunk in communicator.stream():
@@ -86,6 +262,8 @@ async def synthesize_mp3(text: str, voice: str) -> bytes:
 
 
 async def synthesize_with_boundaries(text: str, voice: str):
+    if voice.startswith(ELEVEN_PREFIX):
+        return await _eleven_synthesize(text, voice)
     communicator = edge_tts.Communicate(text, voice=voice, boundary="WordBoundary")
     audio_chunks = []
     boundaries = []
@@ -149,11 +327,37 @@ async def list_voices() -> list[dict]:
                 "localeName": v.get("LocaleName"),
                 "gender": v.get("Gender"),
                 "styleList": v.get("StyleList", []),
+                "provider": "edge",
             }
             for v in voices
             if v.get("Locale") == "en-US"
         ]
-    return _voice_cache
+    return _voice_cache + await _eleven_voices_cached()
+
+
+async def _eleven_voices_cached() -> list[dict]:
+    """ElevenLabs voices when a key is set. A failed listing is not cached and does not hide the Edge list."""
+    global _eleven_voice_cache
+    if not ELEVENLABS_API_KEY:
+        return []
+    if _eleven_voice_cache is None:
+        try:
+            _eleven_voice_cache = await _eleven_voices()
+        except HTTPException as exc:
+            print(f"ElevenLabs voice list unavailable: {exc.detail}")
+            return []
+        except Exception as exc:  # a malformed listing must not take the Edge voices down with it
+            print(f"ElevenLabs voice list unavailable: {exc!r}")
+            return []
+    return _eleven_voice_cache
+
+
+async def _eleven_voices_strict() -> list[dict]:
+    """The ElevenLabs voices, or the real error when the listing fails (for /samples, which must say why)."""
+    global _eleven_voice_cache
+    if _eleven_voice_cache is None:
+        _eleven_voice_cache = await _eleven_voices()
+    return _eleven_voice_cache
 
 
 @app.on_event("startup")
@@ -183,9 +387,10 @@ async def pre_render_samples():
 
 @app.get("/voices")
 async def voices(refresh: bool = False):
-    global _voice_cache
+    global _voice_cache, _eleven_voice_cache
     if refresh:
         _voice_cache = None
+        _eleven_voice_cache = None
     voices = await list_voices()
     for v in voices:
         v["sampleUrl"] = f"/samples/{v['shortName']}"
@@ -245,17 +450,28 @@ async def synthesize_with_timing(payload: SynthesisRequest):
 
 async def ensure_sample(voice: str) -> Path:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-    sample_path = SAMPLES_DIR / f"{voice}.mp3"
+    sample_path = SAMPLES_DIR / (f"eleven-{voice[len(ELEVEN_PREFIX):]}.mp3" if voice.startswith(ELEVEN_PREFIX) else f"{voice}.mp3")
     if sample_path.exists():
         return sample_path
-    audio = await synthesize_mp3(SAMPLE_TEXT, voice)
+    if voice.startswith(ELEVEN_PREFIX):
+        # The provider's own preview clip, so a sample costs no credits
+        if not ELEVENLABS_API_KEY:
+            raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")
+        found = next((v for v in await _eleven_voices_strict() if v["shortName"] == voice), None)
+        if found is None:
+            raise HTTPException(status_code=404, detail="No such ElevenLabs voice on this account")
+        if not found.get("previewUrl"):
+            raise HTTPException(status_code=404, detail="This ElevenLabs voice has no preview clip")
+        audio = await _eleven_fetch_bytes(found["previewUrl"])
+    else:
+        audio = await synthesize_mp3(SAMPLE_TEXT, voice)
     sample_path.write_bytes(audio)
     return sample_path
 
 
 @app.get("/samples/{voice}")
 async def sample_audio(voice: str):
-    if not VOICE_NAME_RE.match(voice):
+    if not _valid_voice(voice):
         raise HTTPException(status_code=400, detail="Invalid voice name")
     try:
         path = await ensure_sample(voice)
@@ -540,4 +756,4 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "providers": _providers()}

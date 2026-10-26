@@ -50,15 +50,24 @@ if (worker) {
     if (!res.ok) throw new Error(`HTTP ${res.status} from ${path}: ${body.slice(0, 200)}`);
     try { return JSON.parse(body); } catch { throw new Error(`${path} did not return JSON: ${body.slice(0, 120)}`); }
   };
+  let providers = ['edge'];
   await check(`health (${worker})`, async () => {
     const h = await fetchJson('/health');
     if (h.status !== 'ok') throw new Error(JSON.stringify(h));
-    return h.runtime;
+    providers = h.providers || providers;
+    return `${h.runtime}, providers: ${providers.join(', ')}`;
   });
   await check('voice list (Worker)', async () => {
     const voices = await fetchJson('/voices');
     if (!voices.some((v) => v.shortName === VOICE)) throw new Error(`${VOICE} is missing (${voices.length} voices)`);
-    return `${voices.length} en-US voices`;
+    const summary = [`${voices.filter((v) => (v.provider || 'edge') === 'edge').length} en-US Edge voices`];
+    // Listing a provider's voices costs nothing, so every configured provider must show up
+    for (const p of providers.filter((p) => p !== 'edge')) {
+      const n = voices.filter((v) => v.provider === p).length;
+      if (!n) throw new Error(`${p} is configured but returned no voices (key rejected or service down?)`);
+      summary.push(`${n} ${p} voices`);
+    }
+    return summary.join(', ');
   });
   await check('synthesis with timings (Worker)', async () => {
     const r = await fetchJson('/synthesize_with_timing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: PHRASE, voice: VOICE, format: 'mp3' }) });

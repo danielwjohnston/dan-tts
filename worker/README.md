@@ -32,6 +32,19 @@ npx wrangler dev        # http://127.0.0.1:8787, API only
 
 The Worker imports the shared engine from `../engine/src`, so there's nothing to copy or sync. `src/extract.js` is the Load from URL implementation (a small HTML tokenizer, since there is no DOM in a Worker); the Python server's `/extract_text` in `app/main.py` follows the same rules, so change both together. Tests: `node --test worker/test/*.test.js` (offline; CI runs them).
 
+## Voice providers: adding ElevenLabs
+
+Edge voices work with no setup. ElevenLabs voices appear as soon as the Worker has an API key; the key stays on the server and is never sent to the browser.
+
+1. Get a key at elevenlabs.io → your profile → **API keys** → Create. The free plan gives 10,000 credits a month (about 10 minutes of speech) for non-commercial use with attribution; the number is on the Subscription page.
+2. Cloudflare dashboard → Workers & Pages → **dan-tts** → **Settings** → **Variables and Secrets** → **Add**. Type **Secret**, name `ELEVENLABS_API_KEY`, paste the key as the value, **Deploy**. A secret is hidden after saving; a plain variable is not, so pick Secret.
+3. Optional: a second entry `ELEVENLABS_MODEL`, also as type Secret, for example `eleven_turbo_v2_5` for faster, cheaper speech. The default is `eleven_multilingual_v2`. (A plain Text variable added in the dashboard is removed by the next Git deploy; secrets stay.)
+4. Check: `https://dan-tts.macdaddydwj.workers.dev/health` now says `"providers":["edge","elevenlabs"]`, and the tester lists the account's voices under "ElevenLabs voices", each with a free preview clip.
+
+Two things that look right but are not. A **Build variable** (Settings → Build) is only visible while the code is being built, never to the running Worker, so the key must be under **Variables and Secrets**. And branch **previews** do not inherit production settings: on the same Variables and Secrets section, switch the toggle from **Production** to **Previews Base** and add the secret there too (secrets must be re-entered by hand). That covers previews created afterwards; a preview that already exists needs the secret set on it directly (Workers & Pages → dan-tts → Previews → the branch → Settings, or `npx wrangler preview secret put ELEVENLABS_API_KEY --name <preview>`). Cloudflare's notes: [Previews configuration](https://developers.cloudflare.com/workers/previews/configuration/).
+
+Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
+
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.
 - Load from URL can't reach sites that block automated access (it says so, with an "Open in browser" link), and pages built entirely in JavaScript give only their description. The browser extension reads such pages in place.
