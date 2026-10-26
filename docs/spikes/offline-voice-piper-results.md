@@ -208,8 +208,7 @@ sounds plainer than the network voices and reads with British-influenced phoneme
 ## GPL and licence notes
 
 - Shipping eSpeak-ng (GPL-3.0-or-later) in the extension makes the extension build a GPL-3.0 combined work,
-  as the owner has decided. The repository still has **no top-level LICENSE file**: add GPL-3.0 before the
-  files land, and a `NOTICE` naming eSpeak-ng, piper-phonemize (MIT), onnxruntime (MIT), Piper (GPL-3.0,
+  as the owner has decided; the repository's `LICENSE` is GPL-3.0-or-later. Add a `NOTICE` naming eSpeak-ng, piper-phonemize (MIT), onnxruntime (MIT), Piper (GPL-3.0,
   as the training and patching tool: none of its code ships in the extension) and the voice's dataset.
 - The GPL requires offering the corresponding source of the eSpeak-ng build. The npm package carries only
   the build output and a README with the June 2024 build steps (emsdk 3.1.47, rhasspy/espeak-ng and
@@ -244,6 +243,6 @@ sounds plainer than the network voices and reads with British-influenced phoneme
 ## Next step
 
 Build step 4 as one PR: `extension/engine/piper.js` with its tests, the Worker, the player route and chunk
-size, the files under `extension/lib/piper/` with `VERSION.txt` and licences, `WORKERS` in the manifest, and
-the GPL-3.0 LICENSE at the repository root. Measure in Chrome and Firefox on a laptop before merging, and
-only then decide on the eSpeak data trim and multi-threading in Chrome.
+size, the files under `extension/lib/piper/` with `VERSION.txt` and licences, and `WORKERS` in the manifest
+(the GPL-3.0 LICENSE is already at the repository root). Measure in Chrome and Firefox on a laptop before
+merging, and only then decide on the eSpeak data trim and multi-threading in Chrome.
