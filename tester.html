@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="static/themes.css" />
   <script src="static/theme.js"></script>
   <script src="static/chunk-text.js"></script>
+  <script src="static/markup.js"></script>
   <script src="static/bundle.js"></script>
   <style>
     :root {
@@ -149,6 +150,9 @@
         <textarea id="text">Hello world from Dan's TTS Project.</textarea>
         <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
       </div>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs voices get real pauses.">
+        <input type="checkbox" id="markup" style="width:auto;margin:0;"> Markup tokens <span style="opacity:.8">([pause 800ms], word[say: respelling], [spell: ABC])</span>
+      </label>
       <div class="text-meta">
         <span id="text-count">6 words &middot; 35 chars</span>
         <span>Ctrl+Enter to synthesize</span>
@@ -258,7 +262,14 @@
     let allVoices = [];
     let lastBlob = null;
     let lastExt = 'mp3';
-    let lastText = '';
+    let lastText = '';       // what was sent to the voice (markup lowered)
+    let lastWritten = '';    // what was typed, tokens removed: shown, exported and used in file names
+    // Markup tokens: lowered to what the chosen voice's provider understands (static/markup.js)
+    const markupBox = document.getElementById('markup');
+    try { markupBox.checked = localStorage.getItem('dan.markup') === '1'; } catch (e) {}
+    markupBox.addEventListener('change', () => { try { localStorage.setItem('dan.markup', markupBox.checked ? '1' : '0'); } catch (e) {} });
+    const textToSpeak = (raw, voice) => (markupBox.checked && window.danMarkup ? danMarkup.lower(raw, voice) : raw);
+    const writtenText = (raw) => (markupBox.checked && window.danMarkup ? danMarkup.strip(raw) : raw);
     let lastVoice = '';
     let isSynthesizing = false;
     let selectedVoiceName = '';
@@ -304,8 +315,8 @@
           batchLog.textContent = `Item ${i + 1} of ${items.length}...`;
           setProgress(i / items.length);
           try {
-            const { blob, boundaries, outFormat } = await synthesizeText(items[i], voice, format);
-            const base = `${String(i + 1).padStart(2, '0')}-${smartFilename(items[i], voice, '').replace(/\.$/, '')}`;
+            const { blob, boundaries, outFormat } = await synthesizeText(textToSpeak(items[i], voice), voice, format, { separateParagraphs: markupBox.checked });
+            const base = `${String(i + 1).padStart(2, '0')}-${smartFilename(writtenText(items[i]), voice, '').replace(/\.$/, '')}`;
             files.push({ name: `${base}.${outFormat}`, data: new Uint8Array(await blob.arrayBuffer()) });
             if (boundaries.length) files.push({ name: `${base}.srt`, data: ttsBundle.boundariesToSrt(boundaries) });
           } catch (err) {
@@ -344,7 +355,7 @@
       const boundaries = wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text }));
       const last = boundaries[boundaries.length - 1];
       return {
-        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg', boundaries,
+        text: lastWritten, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg', boundaries,
         metadata: { words: boundaries.length, duration_ms: last ? Math.floor((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString().replace(/\.\d+Z$/, 'Z') },
       };
     }
@@ -374,7 +385,7 @@
       const playerJs = await (await fetch('static/tts-player.js')).text();
       const last = wordBoundaries[wordBoundaries.length - 1];
       const data = {
-        text: lastText, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg',
+        text: lastWritten, voice: lastVoice, format: lastExt, audio: audioB64, contentType: lastBlob.type || 'audio/mpeg',
         boundaries: wordBoundaries.map(({ offset, duration, text }) => ({ offset, duration, text })),
         metadata: { words: wordBoundaries.length, duration_ms: last ? Math.round((last.offset + last.duration) / 10000) : 0, generated_at: new Date().toISOString() },
       };
@@ -383,7 +394,7 @@
       // switch the HTML parser into escaped mode and swallow the rest of the page.)
       const safe = (str) => str.replace(/<\/(script)/gi, '<\\/$1').replace(new RegExp('<' + '!--', 'g'), '<\\!--');
       const tag = (t) => `<${t}>`;
-      const title = lastText.trim().split(/\s+/).slice(0, 8).join(' ').replace(/[<>&"]/g, '');
+      const title = lastWritten.trim().split(/\s+/).slice(0, 8).join(' ').replace(/[<>&"]/g, '');
       const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
@@ -399,7 +410,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 </body></html>`;
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-      a.download = smartFilename(lastText, lastVoice, 'html');
+      a.download = smartFilename(lastWritten, lastVoice, 'html');
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 10000);
       const kb = Math.ceil(html.length / 1024);
@@ -437,13 +448,28 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
+    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
     function showProviderNote() {
       const note = document.getElementById('provider-note');
       const eleven = serverProviders.includes('elevenlabs');
       note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven
-        ? 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.'
-        : '';
+      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
+      if (eleven) showUsage();
+    }
+    /* Live credit count from /usage, replacing the generic note when the server can report it */
+    async function showUsage() {
+      const api = currentApi();
+      try {
+        const res = await fetch(`${api}/usage`);
+        if (!res.ok || api !== currentApi()) return;
+        const u = (await res.json()).elevenlabs;
+        if (!u || u.error || !u.limit) return;
+        const n = (x) => x.toLocaleString();
+        const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
+        const minutes = Math.round(u.remaining / 1000);
+        document.getElementById('provider-note').textContent =
+          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset} Edge voices have no quota.`;
+      } catch (e) { /* the generic note stays */ }
     }
 
     /* ---- Which server? The Worker has no ffmpeg, so only MP3 there ---- */
@@ -740,8 +766,9 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     }
 
     /* Text → audio + word timings. Long text is chunked (and always MP3, since only MP3 concatenates). */
-    async function synthesizeText(text, voice, format) {
-      const chunks = chunkText(text);
+    async function synthesizeText(text, voice, format, { separateParagraphs = false } = {}) {
+      // With markup on, a long Edge pause is a paragraph break: synthesize each paragraph on its own
+      const chunks = separateParagraphs ? text.split(/\n\s*\n/).filter((p) => p.trim()).flatMap((p) => chunkText(p)) : chunkText(text);
       if (chunks.length > 1) {
         const { blob, boundaries } = await synthesizeChunked(chunks, voice);
         return { blob, boundaries, outFormat: 'mp3', chunks };
@@ -752,15 +779,15 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
 
     btn.onclick = async () => {
       if (isSynthesizing) return;
-      const text = textArea.value;
-      if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const voice = voiceSelect.value || 'en-US-AriaNeural';
+      const text = textToSpeak(textArea.value, voice);
+      if (!text.trim()) { logEl.textContent = 'Enter some text first.'; return; }
       const format = document.getElementById('format').value;
       setLoading(true);
       logEl.textContent = 'Requesting...';
       try {
-        const { blob, boundaries, outFormat, chunks } = await synthesizeText(text, voice, format);
-        lastBlob = blob; lastExt = outFormat; lastText = text; lastVoice = voice;
+        const { blob, boundaries, outFormat, chunks } = await synthesizeText(text, voice, format, { separateParagraphs: markupBox.checked });
+        lastBlob = blob; lastExt = outFormat; lastText = text; lastWritten = writtenText(textArea.value); lastVoice = voice;
         downloadBtn.disabled = false;
         playerEl.src = URL.createObjectURL(blob);
         playerEl.style.display = '';
@@ -770,7 +797,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const parts = chunks.length > 1 ? `, ${chunks.length} paragraphs` : '';
         const note = outFormat !== format ? ` Long text is generated as MP3.` : '';
         logEl.textContent = `Done (${outFormat}, ${(blob.size / 1024).toFixed(1)} KB, ${boundaries.length} words${parts}).${note}`;
-        addHistory(text, voice, outFormat, blob);
+        addHistory(lastWritten, voice, outFormat, blob);
       } catch (err) {
         console.error(err);
         logEl.textContent = 'Error: ' + err.message;
@@ -833,7 +860,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         if (format === 'player') {
           // Show embed code modal
           const dataJson = JSON.stringify({
-            text: lastText,
+            text: lastWritten,
             voice: lastVoice,
             format: lastExt,
             audio: 'BASE64_AUDIO_DATA_HERE',
@@ -899,7 +926,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = smartFilename(lastText, lastVoice, ext);
+            a.download = smartFilename(lastWritten, lastVoice, ext);
             a.click();
             URL.revokeObjectURL(url);
           };
@@ -926,7 +953,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       const url = URL.createObjectURL(lastBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = smartFilename(lastText, lastVoice, lastExt);
+      a.download = smartFilename(lastWritten, lastVoice, lastExt);
       document.body.appendChild(a);
       a.click();
       a.remove();

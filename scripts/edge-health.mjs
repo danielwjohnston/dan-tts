@@ -69,6 +69,15 @@ if (worker) {
     }
     return summary.join(', ');
   });
+  if (providers.includes('elevenlabs')) {
+    // Informational: a provider hiccup here must not raise the Edge alert (a rejected key already fails the voice-list check)
+    await check('ElevenLabs credits (Worker /usage)', async () => {
+      const u = (await fetchJson('/usage')).elevenlabs;
+      if (!u) throw new Error('no usage reported');
+      if (u.error) return `not available right now (${u.error})`;
+      return `${u.remaining} of ${u.limit} credits left${u.resetsAt ? `, resets ${u.resetsAt.slice(0, 10)}` : ''}`;
+    });
+  }
   await check('synthesis with timings (Worker)', async () => {
     const r = await fetchJson('/synthesize_with_timing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: PHRASE, voice: VOICE, format: 'mp3' }) });
     const bytes = Buffer.from(r.audio || '', 'base64').length;

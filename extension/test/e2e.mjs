@@ -20,7 +20,32 @@ manifest.host_permissions.push('http://127.0.0.1/*');
 writeFileSync(join(ext, 'manifest.json'), JSON.stringify(manifest));
 
 const pdfs = {}; // filled after launch: generated with Chromium so no binaries live in the repo
+// Stand-in voice server (what the Worker answers), so a provider voice is tested without any key:
+// a canned clip from samples/ with word timings spread over it
+const serverRequests = [];
+const SAMPLE_MP3_B64 = readFileSync(join(here, '..', '..', 'samples', 'en-US-AriaNeural.mp3')).toString('base64');
 const server = createServer((req, res) => {
+  const route = req.url.split('?')[0].slice(1);
+  if (['health', 'voices', 'synthesize_with_timing'].includes(route)) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.end(); return; }
+    const json = (d) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(d)); };
+    if (route === 'health') return json({ status: 'ok', runtime: 'test', providers: ['edge', 'elevenlabs'] });
+    if (route === 'voices') return json([
+      { name: 'Aria', shortName: 'en-US-AriaNeural', locale: 'en-US', localeName: 'English (United States)', gender: 'Female', provider: 'edge' },
+      { name: 'Test Narrator', shortName: 'eleven:testvoice01', locale: 'en', localeName: 'American · Narration', gender: 'Male', provider: 'elevenlabs' },
+    ]);
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      const { text, voice } = JSON.parse(b);
+      serverRequests.push({ text, voice });
+      const words = text.split(/\s+/).filter(Boolean);
+      json({ audio: SAMPLE_MP3_B64, contentType: 'audio/mpeg', format: 'mp3', boundaries: words.map((w, i) => ({ offset: i * 2500000, duration: 2000000, text: w })) });
+    });
+    return;
+  }
   const name = req.url.slice(1);
   if (pdfs[name]) { res.setHeader('Content-Type', 'application/pdf'); res.end(pdfs[name]); return; }
   if (name.endsWith('.epub')) { res.setHeader('Content-Type', 'application/epub+zip'); res.end(readFileSync(join(here, 'fixtures', name))); return; }
@@ -66,6 +91,9 @@ try {
   const shadow = (fn, arg) => page.evaluate(([src, a]) => (new Function('root', 'arg', src))(document.querySelector('dan-tts-root').shadowRoot, a), [fn, arg]);
   const activeWord = () => shadow(`const el = root.querySelector('.w.active'); return el ? [Number(el.dataset.i), el.textContent] : null;`);
   const status = () => shadow(`return root.querySelector('.status').textContent;`);
+
+  // The whole run points the extension at the stand-in voice server, so nothing depends on the production Worker
+  await sw.evaluate(async (origin) => { await chrome.storage.sync.set({ server: origin }); }, origin);
 
   // 1. Read page → overlay with clean article
   await read('page');
@@ -365,6 +393,35 @@ try {
   check('library lists PDFs (web and local) and book chapters', /PDF · 127\.0\.0\.1/.test(lib2Text) && /local file/.test(lib2Text) && /Book · 127\.0\.0\.1/.test(lib2Text), lib2Text.slice(0, 160));
   check('library lists each continued page separately', ['Chapter One', 'Chapter Two', 'Chapter Three', 'Chapter Four'].every((t) => lib2Text.includes(t)), lib2Text.slice(0, 200));
   await lib2.close();
+
+  // 7. Server voices. Everything so far read with Edge voices, so the stand-in server must have seen no text
+  check('Edge voices never send text to the voice server', serverRequests.length === 0, `${serverRequests.length} request(s)`);
+  // A provider voice listed by the stand-in server plays through it, with highlighting, on a page long enough for two chunks
+  await sw.evaluate(async () => {
+    await chrome.storage.sync.set({ voice: 'eleven:testvoice01', rate: 1 });
+    await chrome.storage.local.remove('serverVoiceCache');
+  });
+  await page.goto(`${origin}/long.html`);
+  await sw.evaluate(async ({ origin }) => {
+    const tabs = await chrome.tabs.query({ url: `${origin}/*` });
+    await startReading(tabs.find((t) => t.url.endsWith('/long.html')).id, 'page');
+  }, { origin });
+  await page.waitForFunction(() => document.querySelector('dan-tts-root')?.shadowRoot.querySelector('.w.active'), null, { timeout: 30000 })
+    .catch(async (e) => { throw new Error(`server voice: no word highlighted; reader status: "${await status()}"`, { cause: e }); });
+  const firstRequests = serverRequests.length;
+  check('server voice: the text is spoken through the voice server with highlighting', firstRequests >= 1 && serverRequests[0].voice === 'eleven:testvoice01' && /The road out of town/.test(serverRequests[0].text), `${firstRequests} request(s)`);
+  check('server voice: only the first chunk is fetched when playback starts (no early prefetch)', firstRequests === 1 && /^\d+ \/ [2-9]$/.test(await status()), `${firstRequests} request(s), status "${await status()}"`);
+  await shadow(`root.querySelector('.voice').dispatchEvent(new Event('focus'));`);
+  await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.voice optgroup[label^="ElevenLabs"]'), null, { timeout: 20000 });
+  const serverOption = await shadow(`const o = root.querySelector('.voice optgroup[label^="ElevenLabs"] option'); return o && [o.value, o.textContent, root.querySelector('.voice').value];`);
+  check('server voice: listed under its provider and selected', !!serverOption && serverOption[0] === 'eleven:testvoice01' && /Test Narrator/.test(serverOption[1]) && serverOption[2] === 'eleven:testvoice01', JSON.stringify(serverOption));
+  // The second chunk is fetched later (once the first is mostly played, or when it ends), exactly once.
+  // CI machines play audio at an uneven pace, so wait for it rather than assuming a fixed delay.
+  for (let i = 0; i < 200 && serverRequests.length < 2; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(500); // a third request would be the bug this check exists for
+  check('server voice: the next chunk is fetched once, later', serverRequests.length === 2 && serverRequests[1].text !== serverRequests[0].text && /Beyond the mill|cairn|The way back/.test(serverRequests[1].text), `${serverRequests.length} request(s)`);
+  await page.keyboard.press('Escape');
+  await sw.evaluate(async () => { await chrome.storage.sync.set({ voice: 'en-US-AriaNeural' }); await chrome.storage.sync.remove('server'); });
 
   check('no page errors', pageErrors.length === 0, pageErrors.join('; '));
 } finally {

@@ -1,6 +1,7 @@
 """API tests. Edge TTS and outbound HTTP are stubbed so these run offline."""
 import asyncio
 import socket
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -495,3 +496,56 @@ def test_eleven_preview_download_is_guarded(monkeypatch):
     with pytest.raises(HTTPException) as e:
         asyncio.run(main._eleven_fetch_bytes("https://10.0.0.1/clip.mp3"))
     assert e.value.status_code == 502
+
+
+def test_usage_reports_edge_unlimited_and_elevenlabs_credits(client, monkeypatch):
+    assert client.get("/usage").json() == {"edge": {"unlimited": True}}
+
+    async def fake_request(method, path, json_body=None, timeout=60):
+        assert (method, path) == ("GET", "/v1/user/subscription")
+        return {"tier": "free", "character_count": 150, "character_limit": 10000, "next_character_count_reset_unix": 1762128000}
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", fake_request)
+    monkeypatch.setattr(main, "_eleven_usage_cache", None)
+    expected = {"provider": "elevenlabs", "tier": "free", "used": 150, "limit": 10000, "remaining": 9850, "resetsAt": "2025-11-03T00:00:00Z"}
+    assert client.get("/usage").json() == {"edge": {"unlimited": True}, "elevenlabs": expected}
+
+    # Served from the one-minute cache: the provider is not asked again, whatever the query string says
+    async def must_not_run(*a, **k):
+        raise AssertionError("cached answer expected")
+
+    monkeypatch.setattr(main, "_eleven_request", must_not_run)
+    assert client.get("/usage").json()["elevenlabs"] == expected
+    assert client.get("/usage?refresh=1").json()["elevenlabs"] == expected
+    # Once expired, the provider is asked again
+    expires_at, cached = main._eleven_usage_cache
+    monkeypatch.setattr(main, "_eleven_usage_cache", (expires_at - 120, cached))
+    r = client.get("/usage")
+    assert r.status_code == 200 and "error" in r.json()["elevenlabs"]
+
+
+def test_usage_coerces_odd_values_like_the_worker(monkeypatch):
+    async def fake_request(method, path, json_body=None, timeout=60):
+        return {"character_count": "150.7", "character_limit": 10000.2, "next_character_count_reset_unix": "1762128000", "tier": None}
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", fake_request)
+    assert asyncio.run(main._eleven_usage()) == {"provider": "elevenlabs", "tier": "", "used": 150, "limit": 10000, "remaining": 9850, "resetsAt": "2025-11-03T00:00:00Z"}
+    assert main._num("abc") == 0 and main._num([1]) == 0 and main._num(None) == 0
+
+
+def test_usage_reports_a_failed_lookup_without_failing(client, monkeypatch):
+    async def rejected(method, path, json_body=None, timeout=60):
+        raise main._eleven_error(401, '{"detail": {"status": "invalid_api_key"}}')
+
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "_eleven_request", rejected)
+    monkeypatch.setattr(main, "_eleven_usage_cache", None)
+    r = client.get("/usage")
+    assert r.status_code == 200
+    assert "rejected the API key" in r.json()["elevenlabs"]["error"]
+    # The failure is kept briefly (15 s), like the Worker, so an outage is not amplified
+    expires_at, cached = main._eleven_usage_cache
+    assert cached == r.json()["elevenlabs"]
+    assert 0 < expires_at - time.monotonic() <= main.USAGE_TTL_ERROR  # loop.time() is the monotonic clock

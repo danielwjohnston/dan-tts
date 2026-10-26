@@ -163,3 +163,43 @@ test('ELEVENLABS_MODEL changes the model sent to ElevenLabs', async (t) => {
   await callWith({ ...ELEVEN_ENV, ELEVENLABS_MODEL: 'eleven_turbo_v2_5' }, '/synthesize', { method: 'POST', body: JSON.stringify({ text: 'Hi', voice: 'eleven:aaaaaaaaaaaa' }) });
   assert.strictEqual(body.model_id, 'eleven_turbo_v2_5');
 });
+
+test('/usage reports Edge as unlimited and ElevenLabs credits when configured', async (t) => {
+  stubNetwork(t);
+  const realFetch = globalThis.fetch;
+  let subscriptionStatus = 200;
+  let upstream = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://api.elevenlabs.io/v1/user/subscription') {
+      upstream++;
+      return new Response(JSON.stringify(subscriptionStatus === 200 ? { tier: 'free', character_count: 150, character_limit: 10000 } : { detail: { status: 'invalid_api_key' } }), { status: subscriptionStatus, headers: { 'Content-Type': 'application/json' } });
+    }
+    return realFetch(input, init);
+  };
+  // A real (Map-backed) cache, so the caching rules are exercised
+  const store = new Map();
+  globalThis.caches = { default: { match: async (req) => store.get(req.url), put: async (req, res) => { store.set(req.url, res); } } };
+  assert.deepStrictEqual(await callWith({}, '/usage').then((r) => r.json()), { edge: { unlimited: true } });
+  const withKey = await callWith(ELEVEN_ENV, '/usage').then((r) => r.json());
+  assert.deepStrictEqual(withKey.elevenlabs, { provider: 'elevenlabs', tier: 'free', used: 150, limit: 10000, remaining: 9850, resetsAt: null });
+  // Served from the cache: no new upstream call, whatever the query string says
+  await callWith(ELEVEN_ENV, '/usage');
+  await callWith(ELEVEN_ENV, '/usage?refresh=1');
+  await callWith(ELEVEN_ENV, '/usage?x=2');
+  assert.strictEqual(upstream, 1);
+  // A failed lookup is reported (200) and kept only briefly
+  store.clear();
+  subscriptionStatus = 401;
+  const failed = await callWith(ELEVEN_ENV, '/usage');
+  assert.strictEqual(failed.status, 200);
+  assert.strictEqual(failed.headers.get('cache-control'), 'public, max-age=15');
+  assert.match((await failed.json()).elevenlabs.error, /rejected the API key/);
+  assert.strictEqual([...store.values()][0].headers.get('cache-control'), 'public, max-age=15');
+  // Concurrent cold misses share one upstream call
+  store.clear();
+  upstream = 0;
+  subscriptionStatus = 200;
+  await Promise.all([callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage')]);
+  assert.strictEqual(upstream, 1);
+});

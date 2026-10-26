@@ -1,6 +1,7 @@
 // Entry points (toolbar, context menu, shortcut), header rule, and message relay
 // between the page's content script and the offscreen player.
 import { EDGE_ORIGIN, EDGE_USER_AGENT, listVoices } from './engine/tts.js';
+import { listServerVoices, serverFor } from './engine/server.js';
 
 const RULE_ID = 1;
 
@@ -121,12 +122,38 @@ async function sendToPlayer(msg) {
 }
 
 // ---- Voices (cached for a day) ----
+// Provider voices from the voice server come first, then Microsoft's Edge voices.
 async function getVoices() {
+  const [server, edge] = await Promise.all([getServerVoices(), getEdgeVoices()]);
+  return [...server, ...edge];
+}
+
+async function getEdgeVoices() {
   const { voiceCache } = await chrome.storage.local.get('voiceCache');
   if (voiceCache && Date.now() - voiceCache.at < 86400000) return voiceCache.voices;
   const voices = (await listVoices()).map(({ ShortName, Locale, LocaleName, Gender, FriendlyName }) => ({ ShortName, Locale, LocaleName, Gender, FriendlyName }));
   await chrome.storage.local.set({ voiceCache: { at: Date.now(), voices } });
   return voices;
+}
+
+// A server that is off, unreachable or has no providers adds nothing: the Edge voices still list.
+// The listing waits at most 5 s so it cannot hold the picker back for long; an empty answer is kept
+// for an hour (a key added on the server shows up soon) and a failure for five minutes.
+const SERVER_VOICES_TTL = { ok: 86400000, empty: 3600000, failed: 300000 };
+async function getServerVoices() {
+  const base = serverFor((await chrome.storage.sync.get('server')).server);
+  if (!base) return [];
+  const { serverVoiceCache: c } = await chrome.storage.local.get('serverVoiceCache');
+  if (c && c.server === base && Date.now() - c.at < SERVER_VOICES_TTL[c.failed ? 'failed' : c.voices.length ? 'ok' : 'empty']) return c.voices;
+  try {
+    const voices = await listServerVoices(base, { timeoutMs: 5000 });
+    await chrome.storage.local.set({ serverVoiceCache: { at: Date.now(), server: base, voices } });
+    return voices;
+  } catch (e) {
+    console.warn('Voice server unavailable:', e.message);
+    await chrome.storage.local.set({ serverVoiceCache: { at: Date.now(), server: base, voices: [], failed: true } });
+    return [];
+  }
 }
 
 // ---- Relay ----

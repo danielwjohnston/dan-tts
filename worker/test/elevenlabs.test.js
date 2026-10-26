@@ -1,7 +1,7 @@
 // The ElevenLabs provider, offline: fetch is replaced with canned responses.
 import test from 'node:test';
 import assert from 'node:assert';
-import { alignmentToBoundaries, listVoices, synthesize, sample, ID_RE, MAX_CHARS, DEFAULT_MODEL } from '../src/elevenlabs.js';
+import { alignmentToBoundaries, listVoices, synthesize, sample, usage, ID_RE, MAX_CHARS, DEFAULT_MODEL } from '../src/elevenlabs.js';
 
 const jsonRes = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const AUDIO = Uint8Array.from([0x49, 0x44, 0x33, 1, 2, 3]); // "ID3" + bytes
@@ -93,7 +93,7 @@ test('sample serves the preview clip and 404s for unknown voices', async () => {
         { voice_id: 'cccccccccccc', name: 'Quiet', preview_url: '' },
       ] });
     }
-    if (url === 'https://cdn.example/adam.mp3') return new Response(AUDIO, { headers: { 'Content-Type': 'audio/mpeg' } });
+    if (url === 'https://cdn.example/adam.mp3') return new Response(AUDIO, { headers: { 'Content-Type': 'text/plain' } }); // as the real preview CDN labels them
     throw new Error(`unexpected ${url}`);
   };
   const { audio, contentType } = await sample('k', 'eleven:aaaaaaaaaaaa', { fetchImpl });
@@ -151,4 +151,22 @@ test('sample refuses a preview clip that is not served over https', async () => 
     throw new Error(`must not fetch ${url}`);
   };
   await assert.rejects(sample('k', 'eleven:aaaaaaaaaaaa', { fetchImpl }), { status: 502, message: /not https/ });
+});
+
+test('usage reports this month\'s credits from the subscription endpoint', async () => {
+  let seen;
+  const fetchImpl = async (url, init) => { seen = { url, key: init.headers['xi-api-key'] }; return jsonRes({ tier: 'free', character_count: 150, character_limit: 10000, next_character_count_reset_unix: 1762128000 }); };
+  const u = await usage('secret', { fetchImpl });
+  assert.strictEqual(seen.url, 'https://api.elevenlabs.io/v1/user/subscription');
+  assert.strictEqual(seen.key, 'secret');
+  assert.deepStrictEqual(u, { provider: 'elevenlabs', tier: 'free', used: 150, limit: 10000, remaining: 9850, resetsAt: '2025-11-03T00:00:00Z' });
+  await assert.rejects(usage('bad', { fetchImpl: async () => jsonRes({ detail: { status: 'invalid_api_key' } }, 401) }), { status: 502 });
+  const over = await usage('k', { fetchImpl: async () => jsonRes({ character_count: 12000, character_limit: 10000 }) });
+  assert.strictEqual(over.remaining, 0);
+  assert.strictEqual(over.resetsAt, null);
+  // Odd values coerce the same way as on the Python server: whole numbers, never a throw
+  const odd = await usage('k', { fetchImpl: async () => jsonRes({ character_count: '150.7', character_limit: 10000.2, next_character_count_reset_unix: '1762128000', tier: null }) });
+  assert.deepStrictEqual(odd, { provider: 'elevenlabs', tier: '', used: 150, limit: 10000, remaining: 9850, resetsAt: '2025-11-03T00:00:00Z' });
+  assert.strictEqual((await usage('k', { fetchImpl: async () => jsonRes({ character_count: 'abc' }) })).used, 0);
+  await assert.rejects(usage('k', { fetchImpl: async () => jsonRes([1, 2]) }), { status: 502, message: /unreadable/ });
 });

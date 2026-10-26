@@ -34,7 +34,7 @@ async function request(fetchImpl, url, init) {
 async function readJson(res) {
   try {
     const data = await res.json();
-    if (!data || typeof data !== 'object') throw new Error('not an object');
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('not an object');
     return data;
   } catch {
     throw new HttpError(502, 'ElevenLabs returned an unreadable response');
@@ -133,6 +133,29 @@ export async function synthesize(text, voice, { key, model = DEFAULT_MODEL, fetc
   return { audio, boundaries: alignmentToBoundaries(data.alignment || data.normalized_alignment) };
 }
 
+/**
+ * This month's credit use, for /usage. Listing it costs nothing. The free plan counts characters,
+ * so "credits" and "characters" are the same number here.
+ */
+export async function usage(key, { fetchImpl = globalThis.fetch } = {}) {
+  const res = await request(fetchImpl, `${API}/v1/user/subscription`, { headers: { 'xi-api-key': key }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) await fail(res);
+  const s = await readJson(res);
+  // Whole numbers, never a throw, the same way the Python server coerces them
+  const num = (v) => Math.trunc(Number(v)) || 0;
+  const used = num(s.character_count);
+  const limit = num(s.character_limit);
+  const reset = num(s.next_character_count_reset_unix);
+  return {
+    provider: 'elevenlabs',
+    tier: typeof s.tier === 'string' ? s.tier : '',
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    resetsAt: reset > 0 ? new Date(reset * 1000).toISOString().replace(/\.\d+Z$/, 'Z') : null,
+  };
+}
+
 /** The voice's preview clip, for /samples/eleven:<id>. */
 export async function sample(key, voice, { fetchImpl = globalThis.fetch } = {}) {
   const voices = await listVoices(key, { fetchImpl });
@@ -142,5 +165,7 @@ export async function sample(key, voice, { fetchImpl = globalThis.fetch } = {}) 
   if (!/^https:\/\//i.test(found.previewUrl)) throw new HttpError(502, 'ElevenLabs preview URL is not https');
   const res = await request(fetchImpl, found.previewUrl, { signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new HttpError(502, `ElevenLabs preview failed: HTTP ${res.status}`);
-  return { audio: new Uint8Array(await res.arrayBuffer()), contentType: res.headers.get('content-type') || 'audio/mpeg' };
+  // The preview CDN labels the clips text/plain; a browser's audio element needs an audio type to play them
+  const ct = res.headers.get('content-type') || '';
+  return { audio: new Uint8Array(await res.arrayBuffer()), contentType: /^audio\//i.test(ct) ? ct : 'audio/mpeg' };
 }

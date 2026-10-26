@@ -1,6 +1,6 @@
 # Spec: SSML editor
 
-Status: Draft
+Status: Phase 1 built (2026-10-26): `static/markup.js` and the tester's "Markup tokens" switch; see §11.
 Roadmap item: Medium-Term, "SSML support"
 
 ## 1. Summary
@@ -87,6 +87,10 @@ Constructs may nest only where the target supports it (prosody can wrap emphasis
 
 ## 6. Technical design
 
+> §6.1 and §6.2 describe the draft's SSML design. They are superseded by §11: the shared module is `static/markup.js`
+> (`lower`, `strip`, `parse`, `hasMarkup`), no `ssml` flag exists on the servers or the engine, and Edge's endpoint rejects
+> SSML inside the text in any case.
+
 ### 6.1 Shared module
 
 Add `static/ssml.js` (plain browser module, same pattern as `static/chunk-text.js`):
@@ -159,10 +163,12 @@ UI.
 
 ## 9. Rollout
 
-1. **Phase 1:** fix the escaping behind `ssml: true` in the engine and server, with tests. No UI.
-   Useful immediately for API users.
-2. **Phase 2:** shared `static/ssml.js` module and tester UI (Markup toggle, preview, validation).
-3. **Phase 3:** extension Markup option and saved markup in the library.
+Superseded by §11 for the mechanics (no SSML is sent; tokens are lowered per provider). The phases now in use:
+
+1. **Phase 1 (done, 2026-10-26):** `static/markup.js` and the tester's "Markup tokens" switch, with unit tests in
+   `tests/markup.test.js`. Applies to the Synthesize button and the Batch panel.
+2. **Phase 2:** the insert toolbar (§5.5), a text preview (§5.3) and saved markup in the tester's history (§5.6).
+3. **Phase 3:** the extension's Markup option and saved markup in its library (§5.5, §5.6).
 
 Each phase is a separate PR, following the pattern of recent merged PRs.
 
@@ -173,3 +179,30 @@ Each phase is a separate PR, following the pattern of recent merged PRs.
 - An SSML body containing `<script>` or any element outside the subset is rejected by the server.
 - A user can produce all six constructs in §5.2 from the tester without typing a tag.
 - The extension and tester produce the same SSML for the same markup.
+
+## 11. What phase 1 shipped, and how it differs from the draft
+
+Edge's endpoint rejects SSML inside the text (the engine's envelope is the only markup it accepts), and
+ElevenLabs takes plain text plus `<break>` tags. So phase 1 does not send SSML at all. Instead, the
+tokens are **lowered to what each provider understands**, in one shared module, `static/markup.js`:
+
+| Token | Written text (`strip()`; nothing displays it yet) | Edge | ElevenLabs |
+|---|---|---|---|
+| `[pause]`, `[pause 800ms]`, `[pause 1.5s]` (100 ms–5 s) | nothing | a comma (< 600 ms), a full stop (< 1.2 s) or a paragraph break, fitted to the punctuation already there; the tester then synthesizes each paragraph as its own request, so the gap is the natural silence between two clips, not the requested length | `<break time="0.8s" />`, 3 s at most |
+| `word[say: respelling]` | `word` | `respelling` | `respelling` |
+| `[spell: ABC]` | `ABC` | `A B C` | `A B C` |
+
+Anything else in square brackets (`[1]`, `[citation needed]`) is left alone; a token body stays on one line and
+holds no brackets, so a half-typed token never swallows the text after it. Punctuation glued to a respelled word,
+or written right after a pause (`and then [pause].`), stays with the word. `lower(text, voiceOrProvider)` gives
+the text to send, `strip(text)` the written text (token-free text comes back unchanged), `parse(text)` the
+segments, `hasMarkup(text)` a quick check. Unit tests: `tests/markup.test.js`.
+
+The tester's **Markup tokens** switch (next to the text box) lowers the text for the selected voice before
+synthesis, in the Synthesize button and the Batch panel; exports reuse that read. History rows, file names and
+the exported `text` carry the written text. Highlighting and captions show the spoken words (the server's word
+boundaries), as §6.5 says.
+
+Not yet: emphasis, rate, pitch and volume spans (Edge cannot take them per span; ElevenLabs has no tag for
+them), the insert toolbar (§5.5), a text preview (§5.3), saved markup in the tester's history and the extension's
+library (§5.6), and the extension itself (§9 phase 3).

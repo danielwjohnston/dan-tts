@@ -225,6 +225,62 @@ def _alignment_to_boundaries(alignment: dict) -> list[dict]:
     return out
 
 
+_eleven_usage_cache: Optional[tuple[float, dict]] = None  # (expires at loop time, result)
+_eleven_usage_lock: Optional[asyncio.Lock] = None
+USAGE_TTL_OK, USAGE_TTL_ERROR = 60, 15  # seconds; the Worker uses the same two
+
+
+def _num(v) -> int:
+    """A whole number from whatever the provider sent, never a throw (same as the Worker's coercion)."""
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _eleven_usage() -> dict:
+    """This month's credit use. The free plan counts characters, so credits and characters are the same number."""
+    s = await _eleven_request("GET", "/v1/user/subscription", timeout=15)
+    used = _num(s.get("character_count"))
+    limit = _num(s.get("character_limit"))
+    reset = _num(s.get("next_character_count_reset_unix"))
+    return {
+        "provider": "elevenlabs",
+        "tier": s.get("tier") if isinstance(s.get("tier"), str) else "",
+        "used": used,
+        "limit": limit,
+        "remaining": max(0, limit - used),
+        "resetsAt": datetime.fromtimestamp(reset, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if reset > 0 else None,
+    }
+
+
+async def _usage() -> dict:
+    """What each provider costs right now. A failed ElevenLabs lookup is reported, not raised, and kept
+    15 s; a good answer a minute. Concurrent misses share one upstream call."""
+    global _eleven_usage_cache, _eleven_usage_lock
+    out: dict = {"edge": {"unlimited": True}}
+    if not ELEVENLABS_API_KEY:
+        return out
+    loop = asyncio.get_running_loop()
+    if _eleven_usage_cache and loop.time() < _eleven_usage_cache[0]:
+        out["elevenlabs"] = _eleven_usage_cache[1]
+        return out
+    _eleven_usage_lock = _eleven_usage_lock or asyncio.Lock()
+    async with _eleven_usage_lock:
+        if _eleven_usage_cache and loop.time() < _eleven_usage_cache[0]:
+            out["elevenlabs"] = _eleven_usage_cache[1]
+            return out
+        try:
+            result, ttl = await _eleven_usage(), USAGE_TTL_OK
+        except HTTPException as exc:
+            result, ttl = {"error": exc.detail}, USAGE_TTL_ERROR
+        except Exception:
+            result, ttl = {"error": "ElevenLabs usage unavailable"}, USAGE_TTL_ERROR
+        _eleven_usage_cache = (loop.time() + ttl, result)
+        out["elevenlabs"] = result
+    return out
+
+
 async def _eleven_synthesize(text: str, voice: str) -> tuple[bytes, list[dict]]:
     if not ELEVEN_ID_RE.match(voice):
         raise HTTPException(status_code=400, detail="Invalid voice name")
@@ -757,3 +813,8 @@ async def export_timing(payload: SynthesisRequest, format: str = "json"):
 @app.get("/health")
 async def health():
     return {"status": "ok", "providers": _providers()}
+
+
+@app.get("/usage")
+async def usage():
+    return await _usage()

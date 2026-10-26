@@ -58,7 +58,9 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Design:** the spec's tokens (`[pause 400ms]`, `[say: Ker-nel]`, `[spell: SSML]`, `[slow]…[/slow]`) in one shared module with tests; each provider gets what it understands: Azure full SSML; ElevenLabs `<break time>` and respelled text; Edge respelled text, punctuation-based pauses and prosody. Captions carry the spoken words, never the markup.
 
-**Done when:** `tokensToSsml` and the per-provider lowering have unit tests; the tester has the Markup toggle and preview; highlighting survives a pause.
+**Done when:** `lower()` and the per-provider lowering have unit tests; the tester has the Markup toggle and preview; highlighting survives a pause.
+
+**Status (2026-10-26):** phase 1 built. `static/markup.js` parses `[pause]`, `[pause 800ms]`, `word[say: respelling]` and `[spell: ABC]`, leaves other brackets alone, and lowers per provider: Edge gets punctuation for pauses (comma, full stop, paragraph break) and plain respellings; ElevenLabs gets `<break time>` tags (3 s cap) and the same respellings; `strip()` gives the written text. The tester's "Markup tokens" switch lowers the text for the chosen voice before synthesis (Synthesize and Batch), and synthesizes each paragraph of lowered text as its own request so a long Edge pause is a real gap. Listening checks with real voices, the text preview and toolbar (phase 2) and the extension (phase 3) remain.
 
 ### C. Server voices in the extension and desktop app
 
@@ -68,6 +70,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** an end-to-end check reads a page with an `eleven:` voice when a key is configured, and skips cleanly when it isn't.
 
+**Status (2026-10-26):** built. `engine/src/server.js` (shared with the extension and the desktop app) lists provider voices from `/voices` and speaks through `/synthesize_with_timing`; the reader groups them under their provider, the player routes by the id prefix and prefetches a paid chunk only once the current one is mostly played; the extension has an options page for the server (empty = Edge only); the desktop app calls the server through its main process. The Chromium end-to-end test reads a page with an `eleven:` voice from a stand-in server, so no key is needed in CI.
+
 ### D. Offline voice
 
 **Question:** is an on-device voice good enough that people keep it on?
@@ -76,6 +80,8 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** a page reads with highlighting with the network off.
 
+**Status (2026-10-26):** researched, not built. [`docs/spikes/offline-voice.md`](spikes/offline-voice.md) compares the engines and recommends Piper through onnxruntime-web with its alignment patch for the first slice (fits Firefox's 200 MB limit, real time on one thread, native word timings), with Kokoro-82M as the better-sounding, permissively licensed second slice where WebGPU or the desktop app's native runtime is available. Two decisions are the owner's before building: the project's licence (none exists today; Piper is GPL-3.0) and the voice (public-domain `ljspeech`, `kristin` or `cori`, never the research-only `lessac` family).
+
 ### E. Public listing
 
 Only after A and D, per the terms decision: public builds default to a licensed or offline voice; Edge stays the self-hosted default. Firefox signing, Chrome Web Store, Calibre index, in that order.
@@ -83,6 +89,8 @@ Only after A and D, per the terms decision: public builds default to a licensed 
 ### F. Operations
 
 The health check lists voices from every configured provider (listing costs no credits); a `/usage` view shows remaining credits where the provider exposes them; defaults live in one place on each server.
+
+**Status (2026-10-26):** `/usage` exists on both servers (Edge: no quota; ElevenLabs: used, limit, remaining and reset date, cached a minute, a failed lookup reported rather than raised); the tester shows the live count under the voice picker and the health check logs it when a key is configured.
 
 ## 4. Order and size
 
