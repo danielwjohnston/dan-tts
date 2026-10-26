@@ -5,7 +5,7 @@ The site and the API in one Worker on Cloudflare's free plan, at **https://dan-t
 | Endpoint | On the Worker |
 |---|---|
 | `GET /` (demo), `/tester.html`, `/static/…` | ✅ Same files as GitHub Pages |
-| `GET /health`, `GET /voices`, `GET /samples/{voice}` | ✅ (voices and samples are cached) |
+| `GET /health`, `GET /voices`, `GET /samples/{voice}` | ✅ (voices and samples are cached; ElevenLabs and Speechify voices when their keys are set) |
 | `POST /synthesize`, `POST /synthesize_with_timing` | ✅ MP3 only |
 | `POST /export?format=json\|webvtt\|srt` | ✅ |
 | `POST /extract_text` (Load from URL) | ✅ Reads `<main>`/`<article>`, drops menus, sidebars and boxes; 5 MB and 15 s limits |
@@ -44,6 +44,17 @@ Edge voices work with no setup. ElevenLabs voices appear as soon as the Worker h
 Two things that look right but are not. A **Build variable** (Settings → Build) is only visible while the code is being built, never to the running Worker, so the key must be under **Variables and Secrets**. And branch **previews** do not inherit production settings: on the same Variables and Secrets section, switch the toggle from **Production** to **Previews Base** and add the secret there too (secrets must be re-entered by hand). That covers previews created afterwards; a preview that already exists needs the secret set on it directly (Workers & Pages → dan-tts → Previews → the branch → Settings, or `npx wrangler preview secret put ELEVENLABS_API_KEY --name <preview>`). Cloudflare's notes: [Previews configuration](https://developers.cloudflare.com/workers/previews/configuration/).
 
 `/usage` reports the month's remaining credits (the tester shows them under the voice picker, and the health check logs them). Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
+
+## Voice providers: adding Speechify
+
+Speechify voices appear the same way, as `speechify:<voice_id>`, once the Worker has a key. The key stays on the server and is never sent to the browser.
+
+1. Get a key at [platform.speechify.ai](https://platform.speechify.ai) → **API keys**. Speechify bills per character; the balance is on the console's usage page (there is no usage endpoint, so `/usage` links there instead of counting).
+2. Cloudflare dashboard → Workers & Pages → **dan-tts** → **Settings** → **Variables and Secrets** → **Add**. Type **Secret**, name `SPEECHIFY_API_KEY`, paste the key, **Deploy**. The same notes as above apply: a Build variable is not visible to the running Worker, and previews need the secret set on **Previews Base** too.
+3. Optional secrets: `SPEECHIFY_MODEL` (default `simba-3.5`, the recommended model, 48 languages; `simba-3.2` is English only, `simba-3.0` six languages; `simba-english` and `simba-multilingual` are retired and a new workspace gets `400 model_retired` for them, which the server reports as "set SPEECHIFY_MODEL to simba-3.5"). `SPEECHIFY_LOCALE` filters the shared catalogue by locale prefix (default `en`; empty lists every locale). `GET https://api.speechify.ai/v1/audio/models` with the key says which model ids the workspace can use today.
+4. Check: `/health` says `"providers":["edge","speechify"]` (or all three), and the tester lists the voices under "Speechify voices", each with the catalogue's free preview clip. Only voices the configured model can speak are listed.
+
+Word timings (highlighting, captions, `/export`) come from `POST /v1/audio/speech`, which returns JSON with the audio base64-encoded in `audio_data` plus speech marks, and takes 2,000 spoken characters a request (the tester reads paragraph by paragraph anyway; a longer paragraph gets a 422 that says so). Plain `/synthesize` uses `POST /v1/audio/stream`, which returns the audio bytes and takes 20,000. Send `"language": "fr-FR"` (any BCP-47 tag) in the request body when the text is not in the voice's own language; the tester shows a language box for Speechify voices. Markup pauses become `<break>` tags inside a `<speak>` document. Locally: `SPEECHIFY_API_KEY=...` in `worker/.dev.vars`.
 
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.

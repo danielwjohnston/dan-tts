@@ -19,10 +19,10 @@ FAKE_BOUNDARIES = [
 
 @pytest.fixture
 def client(monkeypatch):
-    async def fake_mp3(text, voice):
+    async def fake_mp3(text, voice, language=None):
         return FAKE_MP3
 
-    async def fake_boundaries(text, voice):
+    async def fake_boundaries(text, voice, language=None):
         return FAKE_MP3, list(FAKE_BOUNDARIES)
 
     async def fake_voices():
@@ -549,3 +549,265 @@ def test_usage_reports_a_failed_lookup_without_failing(client, monkeypatch):
     expires_at, cached = main._eleven_usage_cache
     assert cached == r.json()["elevenlabs"]
     assert 0 < expires_at - time.monotonic() <= main.USAGE_TTL_ERROR  # loop.time() is the monotonic clock
+
+
+# ---- Speechify provider ----
+
+SPEECHIFY_VOICE = "speechify:geffen_32"
+# "Hello, welcome" spoken over 0.125s-0.75s, in Speechify's milliseconds
+SPEECH_MARKS = {
+    "type": "sentence", "value": "Hello, welcome", "start": 0, "end": 14, "start_time": 0, "end_time": 750,
+    "chunks": [
+        {"type": "word", "value": "Hello,", "start": 0, "end": 6, "start_time": 125, "end_time": 375},
+        {"type": "word", "value": "welcome", "start": 7, "end": 14, "start_time": 375, "end_time": 750.4},
+    ],
+}
+
+
+def test_speech_marks_become_boundaries_in_ticks():
+    assert main._speech_marks_to_boundaries(SPEECH_MARKS) == [
+        {"offset": 1_250_000, "duration": 2_500_000, "text": "Hello,"},
+        {"offset": 3_750_000, "duration": 3_754_000, "text": "welcome"},
+    ]
+    assert main._speech_marks_to_boundaries(None) == []
+    assert main._speech_marks_to_boundaries({"chunks": []}) == []
+    # a sentence with no word chunks is one boundary; odd values are tolerated; blank words are dropped
+    assert main._speech_marks_to_boundaries({"value": "Hi", "start_time": "10", "end_time": None}) == [{"offset": 100_000, "duration": 0, "text": "Hi"}]
+    nested = {"chunks": [{"chunks": [{"value": "a", "start_time": 0, "end_time": 100}, {"value": " ", "start_time": 100, "end_time": 100}]}, {"value": "b", "start_time": 200, "end_time": 300}]}
+    assert [b["text"] for b in main._speech_marks_to_boundaries(nested)] == ["a", "b"]
+
+
+@pytest.mark.parametrize("status, body, expected_status, words", [
+    (401, '{"error": {"code": "unauthorized", "message": "bad key"}}', 502, "rejected the API key"),
+    (402, '{"error": {"code": "insufficient_credits"}}', 429, "credits are used up"),
+    (400, '{"error": {"code": "model_retired", "message": "simba-english is retired"}}', 502, "SPEECHIFY_MODEL"),
+    (400, '{"error": {"code": "content_policy_violation"}}', 422, "content policy"),
+    (400, '{"error": {"code": "validation_failed", "message": "input too long"}}', 422, "rejected the request (input too long)"),
+    (429, '{"error": {"code": "rate_limited"}}', 429, "rate-limiting"),
+    (500, "not json", 502, "HTTP 500"),
+])
+def test_speechify_errors_are_plain_language(status, body, expected_status, words):
+    exc = main._speechify_error(status, body)
+    assert exc.status_code == expected_status
+    assert words in exc.detail
+
+
+def test_speechify_synthesize_with_timings_posts_to_speech(monkeypatch):
+    seen = {}
+
+    async def fake_request(method, path, json_body=None, timeout=60, raw=False):
+        seen.update(method=method, path=path, body=json_body, raw=raw)
+        return {"audio_data": "SUQzc3BlZWNoaWZ5", "audio_format": "mp3", "billable_characters_count": 14, "speech_marks": SPEECH_MARKS}  # "ID3speechify"
+
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    monkeypatch.setattr(main, "_speechify_request", fake_request)
+    audio, boundaries = asyncio.run(main._speechify_synthesize("Hello, welcome", SPEECHIFY_VOICE))
+    assert (seen["method"], seen["path"], seen["raw"]) == ("POST", "/v1/audio/speech", False)
+    assert seen["body"] == {"input": "Hello, welcome", "voice_id": "geffen_32", "model": main.SPEECHIFY_MODEL, "audio_format": "mp3"}
+    assert "language" not in seen["body"]
+    assert audio == b"ID3speechify"
+    assert [b["text"] for b in boundaries] == ["Hello,", "welcome"]
+    # language rides along when the text is not in the voice's locale
+    asyncio.run(main._speechify_synthesize("Bonjour", SPEECHIFY_VOICE, language="fr-FR"))
+    assert seen["body"]["language"] == "fr-FR"
+
+
+def test_speechify_synthesize_without_timings_streams_audio(monkeypatch):
+    seen = {}
+
+    async def fake_request(method, path, json_body=None, timeout=60, raw=False):
+        seen.update(method=method, path=path, body=json_body, raw=raw)
+        return b"ID3stream"
+
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    monkeypatch.setattr(main, "_speechify_request", fake_request)
+    audio, boundaries = asyncio.run(main._speechify_synthesize("x" * 5000, SPEECHIFY_VOICE, timings=False))
+    assert (seen["path"], seen["raw"]) == ("/v1/audio/stream", True)
+    assert seen["body"]["input"] == "x" * 5000  # longer than the speech endpoint allows, fine for the stream
+    assert (audio, boundaries) == (b"ID3stream", [])
+
+
+def test_speechify_synthesize_validates_before_network(monkeypatch):
+    async def must_not_run(*args, **kwargs):
+        raise AssertionError("no network call expected")
+
+    monkeypatch.setattr(main, "_speechify_request", must_not_run)
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_synthesize("hi", "speechify:bad id"))
+    assert e.value.status_code == 400  # id first, then key, same as the Worker
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_synthesize("hi", SPEECHIFY_VOICE))
+    assert e.value.status_code == 503
+    assert "SPEECHIFY_API_KEY" in e.value.detail
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_synthesize("hi", SPEECHIFY_VOICE + "\n"))
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_synthesize("x" * (main.SPEECHIFY_MAX_CHARS + 1), SPEECHIFY_VOICE))
+    assert e.value.status_code == 422
+    assert "word timings" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_synthesize("x" * (main.SPEECHIFY_STREAM_MAX_CHARS + 1), SPEECHIFY_VOICE, timings=False))
+    assert e.value.status_code == 422
+
+
+def test_speechify_limit_counts_spoken_characters_not_ssml_tags(monkeypatch):
+    seen = {}
+
+    async def fake_request(method, path, json_body=None, timeout=60, raw=False):
+        seen["body"] = json_body
+        return {"audio_data": "SUQz", "speech_marks": {}}
+
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    monkeypatch.setattr(main, "_speechify_request", fake_request)
+    text = "<speak>" + "x" * 1990 + ' <break time="0.4s" /> ' + "y" * 5 + "</speak>"
+    assert len(text) > main.SPEECHIFY_MAX_CHARS
+    asyncio.run(main._speechify_synthesize(text, SPEECHIFY_VOICE))
+    assert seen["body"]["input"] == text  # sent as written, tags included
+
+
+def test_speechify_voices_route_by_prefix_with_language(monkeypatch):
+    calls = []
+
+    async def fake_speechify(text, voice, language=None, timings=True):
+        calls.append((voice, language, timings))
+        return b"ID3speechify", [{"offset": 0, "duration": 1, "text": "hi"}]
+
+    monkeypatch.setattr(main, "_speechify_synthesize", fake_speechify)
+    assert asyncio.run(main.synthesize_mp3("hi", SPEECHIFY_VOICE, language="fr-FR")) == b"ID3speechify"
+    assert asyncio.run(main.synthesize_with_boundaries("hi", SPEECHIFY_VOICE))[0] == b"ID3speechify"
+    assert calls == [(SPEECHIFY_VOICE, "fr-FR", False), (SPEECHIFY_VOICE, None, True)]
+
+
+def test_language_field_reaches_the_provider_and_is_validated(monkeypatch):
+    seen = []
+
+    async def fake_boundaries(text, voice, language=None):
+        seen.append(language)
+        return FAKE_MP3, list(FAKE_BOUNDARIES)
+
+    async def fake_voices():
+        return []
+
+    monkeypatch.setattr(main, "synthesize_with_boundaries", fake_boundaries)
+    monkeypatch.setattr(main, "synthesize_mp3", fake_boundaries)
+    monkeypatch.setattr(main, "list_voices", fake_voices)
+    with TestClient(main.app) as c:
+        assert c.post("/synthesize_with_timing", json={"text": "Bonjour", "voice": SPEECHIFY_VOICE, "language": "fr-FR"}).status_code == 200
+        assert c.post("/export?format=srt", json={"text": "Bonjour", "voice": SPEECHIFY_VOICE}).status_code == 200
+        assert c.post("/synthesize_with_timing", json={"text": "hi", "language": "not a tag"}).status_code == 422
+        assert c.post("/synthesize_with_timing", json={"text": "hi", "language": "x"}).status_code == 422
+    assert seen == ["fr-FR", None]
+
+
+def test_health_and_usage_list_speechify_when_key_is_set(client, monkeypatch):
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    assert client.get("/health").json() == {"status": "ok", "providers": ["edge", "speechify"]}
+    assert client.get("/usage").json() == {"edge": {"unlimited": True}, "speechify": {"provider": "speechify", "unlimited": False, "usageUrl": main.SPEECHIFY_USAGE_URL}}
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    assert client.get("/health").json()["providers"] == ["edge", "elevenlabs", "speechify"]
+
+
+def test_speechify_voices_follow_cursors_and_keep_only_the_models_voices(monkeypatch):
+    seen = []
+    pages = {
+        None: {"voices": [
+            {"id": "geffen_32", "display_name": "Geffen", "type": "shared", "gender": "male", "locale": "en-US", "tags": ["narration", "calm", "deep", "extra"],
+             "models": [{"name": "simba-3.5", "languages": [{"locale": "en-US", "preview_audio": "https://cdn.example/geffen-en.mp3"}]}], "preview_audio": "https://cdn.example/geffen.mp3"},
+            {"id": "old_only", "display_name": "Old", "type": "shared", "gender": "female", "locale": "en-GB", "models": [{"name": "simba-english", "languages": []}]},
+            {"id": "bad id", "display_name": "Bad", "models": []},
+            {"id": "my-clone", "display_name": "", "type": "personal", "gender": "not_specified", "locale": "en-US", "models": [{"name": "simba-3.5", "languages": [{"locale": "fr-FR", "preview_audio": "https://cdn.example/clone-fr.mp3"}, {"locale": "en-US", "preview_audio": "https://cdn.example/clone-en.mp3"}]}]},
+        ], "next_cursor": "c2", "has_more": True},
+        "c2": {"voices": [{"id": "no_models", "display_name": "Plain", "type": "shared", "gender": "female", "locale": "en-AU", "models": []}], "next_cursor": None, "has_more": False},
+    }
+
+    async def fake_request(method, path, json_body=None, timeout=60, raw=False):
+        seen.append(path)
+        cursor = path.split("cursor=")[1] if "cursor=" in path else None
+        return pages[cursor]
+
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    monkeypatch.setattr(main, "SPEECHIFY_MODEL", "simba-3.5")
+    monkeypatch.setattr(main, "SPEECHIFY_LOCALE", "en")
+    monkeypatch.setattr(main, "_speechify_request", fake_request)
+    voices = asyncio.run(main._speechify_voices())
+    assert seen == ["/v1/voices?limit=200&locale=en", "/v1/voices?limit=200&locale=en&cursor=c2"]
+    assert voices[0] == {
+        "name": "Geffen", "shortName": "speechify:geffen_32", "locale": "en-US", "localeName": "en-US · Narration · Calm · Deep", "gender": "Male",
+        "styleList": [], "provider": "speechify", "category": "shared", "previewUrl": "https://cdn.example/geffen.mp3",
+    }
+    assert [v["shortName"] for v in voices] == ["speechify:geffen_32", "speechify:my-clone", "speechify:no_models"]
+    clone = voices[1]
+    assert (clone["name"], clone["gender"], clone["previewUrl"]) == ("my-clone", "", "https://cdn.example/clone-en.mp3")
+    assert voices[2]["previewUrl"] == ""
+
+
+def test_voices_merge_all_three_providers(monkeypatch):
+    async def fake_edge_list():
+        return [{"Name": "Aria", "ShortName": "en-US-AriaNeural", "Locale": "en-US"}]
+
+    async def fake_eleven_voices():
+        return [{"name": "Adam", "shortName": "eleven:aaaaaaaaaaaa", "provider": "elevenlabs"}]
+
+    attempts = []
+    failing = [True]  # the startup warm-up and the first request fail; then the key starts working
+
+    async def fake_speechify_voices():
+        attempts.append(1)
+        if failing[0]:
+            raise HTTPException(status_code=502, detail="Speechify rejected the API key")
+        return [{"name": "Geffen", "shortName": SPEECHIFY_VOICE, "provider": "speechify"}]
+
+    monkeypatch.setattr(main.edge_tts, "list_voices", fake_edge_list)
+    monkeypatch.setattr(main, "_eleven_voices", fake_eleven_voices)
+    monkeypatch.setattr(main, "_speechify_voices", fake_speechify_voices)
+    monkeypatch.setattr(main, "_voice_cache", None)
+    monkeypatch.setattr(main, "_eleven_voice_cache", None)
+    monkeypatch.setattr(main, "_speechify_voice_cache", None)
+    monkeypatch.setattr(main, "ELEVENLABS_API_KEY", "secret")
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    with TestClient(main.app) as c:
+        # the listing fails: the other voices still list, and the failure is not cached
+        assert [v["shortName"] for v in c.get("/voices").json()] == ["en-US-AriaNeural", "eleven:aaaaaaaaaaaa"]
+        failing[0] = False
+        before = len(attempts)
+        assert [(v["shortName"], v["provider"], v["sampleUrl"]) for v in c.get("/voices").json()] == [
+            ("en-US-AriaNeural", "edge", "/samples/en-US-AriaNeural"),
+            ("eleven:aaaaaaaaaaaa", "elevenlabs", "/samples/eleven:aaaaaaaaaaaa"),
+            (SPEECHIFY_VOICE, "speechify", f"/samples/{SPEECHIFY_VOICE}"),
+        ]
+        c.get("/voices")
+        assert len(attempts) == before + 1  # the good listing is cached
+        c.get("/voices?refresh=1")
+        assert len(attempts) == before + 2  # refresh asks again
+
+
+def test_speechify_sample_serves_preview_clip(client, monkeypatch, tmp_path):
+    async def fake_bytes(url):
+        assert url == "https://cdn.example/geffen.mp3"
+        return b"ID3preview"
+
+    monkeypatch.setattr(main, "SAMPLES_DIR", tmp_path)
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "secret")
+    monkeypatch.setattr(main, "_speechify_voice_cache", [{"shortName": SPEECHIFY_VOICE, "previewUrl": "https://cdn.example/geffen.mp3"}, {"shortName": "speechify:quiet", "previewUrl": ""}])
+    monkeypatch.setattr(main, "_speechify_fetch_bytes", fake_bytes)
+    r = client.get(f"/samples/{SPEECHIFY_VOICE}")
+    assert r.status_code == 200
+    assert r.content == b"ID3preview"
+    assert (tmp_path / "speechify-geffen_32.mp3").exists()
+    assert client.get("/samples/speechify:quiet").status_code == 404
+    assert client.get("/samples/speechify:unknown").status_code == 404
+    assert client.get("/samples/speechify:bad%20id").status_code == 400
+    monkeypatch.setattr(main, "SPEECHIFY_API_KEY", "")
+    assert client.get("/samples/speechify:other").status_code == 503
+
+
+def test_preview_fetch_names_the_provider(monkeypatch):
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._speechify_fetch_bytes("http://cdn.example/x.mp3"))
+    assert e.value.detail == "Speechify preview URL is not https"
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(main._eleven_fetch_bytes("http://cdn.example/x.mp3"))
+    assert e.value.detail == "ElevenLabs preview URL is not https"

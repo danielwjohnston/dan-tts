@@ -150,7 +150,7 @@
         <textarea id="text">Hello world from Dan's TTS Project.</textarea>
         <button class="clear-btn" id="clear-text" title="Clear text">&times;</button>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs voices get real pauses.">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;font-size:12px;color:var(--fg2);margin:6px 0 0;" title="Type tokens into the text: [pause] or [pause 800ms] for a pause, kernel[say: Ker-nel] to respell a word, [spell: SSML] to spell letters out. Other brackets, like [1], are read as before. Edge voices get punctuation for pauses; ElevenLabs and Speechify voices get real pauses.">
         <input type="checkbox" id="markup" style="width:auto;margin:0;"> Markup tokens <span style="opacity:.8">([pause 800ms], word[say: respelling], [spell: ABC])</span>
       </label>
       <div class="text-meta">
@@ -162,6 +162,7 @@
         <div>
           <label>Voice <span id="voice-count" style="font-weight:400;font-size:11px;color:var(--fg2);"></span></label>
           <select id="voice"></select>
+          <input id="language" type="text" placeholder="Language of the text, e.g. fr-FR (blank: the voice's own)" title="Speechify voices: the language of the text when it is not the voice's own language, as a tag such as fr-FR or de-DE. Left blank, the voice's locale is used." style="display:none;margin-top:4px;font-size:12px;" maxlength="35" />
           <div id="provider-note" style="display:none;margin-top:4px;font-size:11px;color:var(--fg2);line-height:1.4;"></div>
         </div>
         <div>
@@ -441,21 +442,35 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
     // Edge voices have names like en-US-AriaNeural; provider voices carry their own display name
-    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices' };
+    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices', speechify: 'Speechify voices' };
     const providerOf = (v) => v.provider || 'edge';
     const displayName = (v) => providerOf(v) === 'edge' ? friendlyName(v.shortName) : (v.name || v.shortName);
     const voiceDetail = (v) => providerOf(v) === 'edge' ? (v.shortName || '') : [PROVIDER_LABELS[providerOf(v)] || providerOf(v), v.localeName].filter(Boolean).join(' · ');
     const nameFor = (shortName) => { const v = allVoices.find(x => (x.shortName || x.name) === shortName); return v ? displayName(v) : friendlyName(shortName); };
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
-    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
-    function showProviderNote() {
+    const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution).';
+    const SPEECHIFY_NOTE = 'Speechify voices are billed per character to that workspace (balance at platform.speechify.ai).';
+    /* One line per licensed provider the server has, then the Edge reminder; nothing when it is Edge alone */
+    function renderProviderNote(elevenText) {
       const note = document.getElementById('provider-note');
-      const eleven = serverProviders.includes('elevenlabs');
-      note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
-      if (eleven) showUsage();
+      const parts = [];
+      if (serverProviders.includes('elevenlabs')) parts.push(elevenText || GENERIC_ELEVEN_NOTE);
+      if (serverProviders.includes('speechify')) parts.push(SPEECHIFY_NOTE);
+      note.style.display = parts.length ? '' : 'none';
+      note.textContent = parts.length ? parts.join(' ') + ' Edge voices have no quota.' : '';
     }
+    function showProviderNote() {
+      renderProviderNote();
+      if (serverProviders.includes('elevenlabs')) showUsage();
+    }
+    /* The language box only matters for Speechify voices (the text's language when it is not the voice's own) */
+    const languageInput = document.getElementById('language');
+    try { languageInput.value = localStorage.getItem('dan.language') || ''; } catch (e) {}
+    languageInput.addEventListener('change', () => { try { localStorage.setItem('dan.language', languageInput.value.trim()); } catch (e) {} });
+    const isSpeechifyVoice = (voice) => /^speechify:/i.test(voice || '');
+    const languageFor = (voice) => (isSpeechifyVoice(voice) && /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(languageInput.value.trim()) ? languageInput.value.trim() : undefined);
+    function showLanguageBox() { languageInput.style.display = isSpeechifyVoice(voiceSelect.value) ? '' : 'none'; }
     /* Live credit count from /usage, replacing the generic note when the server can report it */
     async function showUsage() {
       const api = currentApi();
@@ -467,8 +482,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
         const n = (x) => x.toLocaleString();
         const reset = u.resetsAt ? ` Resets ${new Date(u.resetsAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}.` : '';
         const minutes = Math.round(u.remaining / 1000);
-        document.getElementById('provider-note').textContent =
-          `ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset} Edge voices have no quota.`;
+        renderProviderNote(`ElevenLabs credits: ${n(u.remaining)} of ${n(u.limit)} left this month (about ${minutes} minute${minutes === 1 ? '' : 's'} of speech with the default model).${reset}`);
       } catch (e) { /* the generic note stays */ }
     }
 
@@ -528,6 +542,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
           selectedVoiceName = allVoices[0].shortName || allVoices[0].name;
         }
         voiceSelect.value = selectedVoiceName;
+        showLanguageBox();
         voiceCountEl.textContent = allVoices.length ? `(${allVoices.length})` : '';
         renderGrid();
         logEl.textContent = allVoices.length ? 'Voices loaded.' : 'No voices returned.';
@@ -554,6 +569,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
           if (e.target.closest('.play-sample')) return;
           selectedVoiceName = sn;
           voiceSelect.value = sn;
+          showLanguageBox();
           document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
           card.classList.add('selected');
         };
@@ -631,6 +647,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     voiceSelect.addEventListener('change', () => {
       selectedVoiceName = voiceSelect.value;
       document.querySelectorAll('.card').forEach(c => c.classList.toggle('selected', c.dataset.voice === selectedVoiceName));
+      showLanguageBox();
     });
 
     /* ---- Word highlight rendering ---- */
@@ -685,7 +702,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       const res = await fetch(`${api}/synthesize_with_timing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice, format })
+        body: JSON.stringify({ text, voice, format, language: languageFor(voice) })
       });
       if (!res.ok) {
         const msg = await res.text();
@@ -699,7 +716,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       const res = await fetch(`${api}/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice, format })
+        body: JSON.stringify({ text, voice, format, language: languageFor(voice) })
       });
       if (!res.ok) {
         const msg = await res.text();

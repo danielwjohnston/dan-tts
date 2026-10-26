@@ -40,17 +40,17 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 **Question it answers:** do people pick a licensed voice when it sits next to the Edge ones, and does it read as well (timings, chunking, exports)?
 
 **Design**
-- Voice ids carry the provider: Edge voices keep their names (`en-US-AriaNeural`), ElevenLabs voices are `eleven:<voice_id>`, Azure voices will be `azure:<name>`.
+- Voice ids carry the provider: Edge voices keep their names (`en-US-AriaNeural`), ElevenLabs voices are `eleven:<voice_id>`, Speechify voices `speechify:<voice_id>`, Azure voices will be `azure:<name>`.
 - `/voices` returns every provider the server has a key for, each entry with `provider`, a display `name`, `gender` where known, and a `sampleUrl`.
-- `/synthesize`, `/synthesize_with_timing` and `/export` route by the id's prefix. ElevenLabs uses its `with-timestamps` endpoint; its per-character times become the same word boundaries the highlighter already uses.
+- `/synthesize`, `/synthesize_with_timing` and `/export` route by the id's prefix. ElevenLabs uses its `with-timestamps` endpoint; its per-character times become the same word boundaries the highlighter already uses. Speechify uses `POST /v1/audio/speech` (base64 audio plus speech marks, whose millisecond word times become the same boundaries) for timings and `POST /v1/audio/stream` for plain audio.
 - `/health` lists the configured providers, so the tester can label voices and show the quota note.
-- Keys: `ELEVENLABS_API_KEY` as a Cloudflare secret (Settings → Variables and secrets → Secret) and as an environment variable on the Python server; `ELEVENLABS_MODEL` optional. Never in client code.
+- Keys: `ELEVENLABS_API_KEY` and `SPEECHIFY_API_KEY` as Cloudflare secrets (Settings → Variables and secrets → Secret) and as environment variables on the Python server; `ELEVENLABS_MODEL`, `SPEECHIFY_MODEL` (default `simba-3.5`) and `SPEECHIFY_LOCALE` optional. Never in client code.
 - Errors say what happened in plain words: a rejected key, credits used up for the month, a text too long for the provider.
 - Azure follows with the same engine: the official WebSocket endpoint, a key, and full SSML allowed.
 
 **Done when:** the tester lists ElevenLabs voices beside Edge voices, reads with highlighting, exports captions; offline tests cover the adapter and routing on both servers; the health check lists voices from every configured provider; READMEs say where the key goes and what the free plan allows.
 
-**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Azure is next and needs a key.
+**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Speechify followed the same seam (`worker/src/speechify.js`, the `_speechify_*` helpers, the `speechify:` prefix, catalogue previews as samples, a `language` request field, a `<speak>` document for markup pauses). Azure is next and needs a key.
 
 ### B. Markup editor
 

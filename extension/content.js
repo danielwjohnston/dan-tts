@@ -6,7 +6,7 @@
 
   const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
   const settings = { voice: 'en-US-AriaNeural', rate: 1, server: undefined }; // server: unset = the default voice server, '' = none
-  const PROVIDER_LABELS = { elevenlabs: 'ElevenLabs' };
+  const PROVIDER_LABELS = { elevenlabs: 'ElevenLabs', speechify: 'Speechify' };
   const isServerVoice = (v) => /^[a-z][a-z0-9]*:/i.test(v || '');
   const voiceLabel = (v) => isServerVoice(v) ? 'Server voice' : v;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));

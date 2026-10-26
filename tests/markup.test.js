@@ -86,9 +86,24 @@ test('ElevenLabs pauses become break tags, capped at three seconds', () => {
   assert.strictEqual(lower('a < b [pause] c', 'elevenlabs'), 'a < b <break time="0.4s" /> c');
 });
 
+test('Speechify pauses become break tags in a <speak> document, with the text escaped', () => {
+  assert.strictEqual(lower('Turn left [pause] at the mill.', 'speechify'), '<speak>Turn left <break time="0.4s" /> at the mill.</speak>');
+  assert.strictEqual(lower('Wait [pause 5s] here', 'speechify'), '<speak>Wait <break time="5.0s" /> here</speak>'); // Speechify allows up to 10 s, so no cap below 5 s
+  assert.strictEqual(lower('Wait [pause 150ms] here', 'speechify'), '<speak>Wait <break time="0.15s" /> here</speak>');
+  assert.strictEqual(lower('a < b & c > d [pause] e', 'speechify'), '<speak>a &lt; b &amp; c &gt; d <break time="0.4s" /> e</speak>');
+  assert.strictEqual(lower('R&D[say: R and D] [pause] next', 'speechify'), '<speak>R and D <break time="0.4s" /> next</speak>');
+  assert.strictEqual(lower('and then [pause]. Next.', 'speechify'), '<speak>and then. <break time="0.4s" /> Next.</speak>');
+  // no pause to send: plain text, nothing escaped, no <speak>
+  assert.strictEqual(lower('a < b & c [pause]', 'speechify'), 'a < b & c');
+  assert.strictEqual(lower('the kernel[say: Ker-nel] panicked & stopped', 'speechify'), 'the Ker-nel panicked & stopped');
+  assert.strictEqual(lower('Code [spell: A1 B2].', 'speechify'), 'Code A 1 B 2.');
+});
+
 test('lower() accepts a voice id in place of a provider name', () => {
   assert.strictEqual(providerOf('eleven:21m00Tcm4TlvDq8ikWAM'), 'elevenlabs');
+  assert.strictEqual(providerOf('speechify:geffen_32'), 'speechify');
   assert.strictEqual(providerOf('en-US-AriaNeural'), 'edge');
+  assert.strictEqual(lower('a [pause] b', 'speechify:geffen_32'), '<speak>a <break time="0.4s" /> b</speak>');
   assert.strictEqual(lower('a [pause] b', 'eleven:21m00Tcm4TlvDq8ikWAM'), 'a <break time="0.4s" /> b');
   assert.strictEqual(lower('a [pause] b', 'en-US-AriaNeural'), 'a, b');
 });

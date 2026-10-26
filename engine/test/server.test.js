@@ -7,6 +7,7 @@ const jsonRes = (data, status = 200) => new Response(JSON.stringify(data), { sta
 
 test('provider ids are recognised by their prefix; Edge ids are not', () => {
   assert.ok(isServerVoice('eleven:21m00Tcm4TlvDq8ikWAM'));
+  assert.ok(isServerVoice('speechify:geffen_32'));
   assert.ok(isServerVoice('azure:en-US-JennyNeural'));
   assert.ok(!isServerVoice('en-US-AriaNeural'));
   assert.ok(!isServerVoice(''));
@@ -19,6 +20,7 @@ test('serverFor: unset means the default, empty means off, otherwise the URL wit
   assert.strictEqual(serverFor(''), '');
   assert.strictEqual(serverFor('  http://127.0.0.1:8787/// '), 'http://127.0.0.1:8787');
   assert.strictEqual(providerLabel('elevenlabs'), 'ElevenLabs');
+  assert.strictEqual(providerLabel('speechify'), 'Speechify');
   assert.strictEqual(providerLabel('azure'), 'Azure');
 });
 
