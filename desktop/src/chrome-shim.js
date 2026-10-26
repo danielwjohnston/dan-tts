@@ -81,7 +81,7 @@
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
-    if (/^https?:/i.test(url) && !/^https:\/\/(speech\.platform\.bing\.com|cdn\.jsdelivr\.net)\//.test(url) && (!init || !init.method || init.method === 'GET')) {
+    if (/^https?:/i.test(url) && !/^https:\/\/speech\.platform\.bing\.com\//.test(url) && (!init || !init.method || init.method === 'GET')) {
       let r;
       try {
         r = await window.danDesktop.fetch(url);

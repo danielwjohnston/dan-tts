@@ -1,4 +1,6 @@
 tesseract.js 7.0.0 + tesseract.js-core 7.0.0 (Apache-2.0), unmodified:
 - dist/tesseract.esm.min.js, dist/worker.min.js
 - tesseract-core-simd-lstm.wasm.js (SIMD + LSTM only; every Chrome that meets the extension minimum supports WASM SIMD)
-English language data (@tesseract.js-data/eng) is downloaded from jsDelivr on first use and cached by tesseract.js.
+eng.traineddata.gz is the English language data from @tesseract.js-data/eng 1.0.0 (MIT; the data itself is
+Apache-2.0 tessdata 4.0.0 "best", integerized), the file tesseract.js 7 would otherwise download from jsDelivr
+on first use. Bundled so recognition needs no download and can't stall on one.

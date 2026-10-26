@@ -55,3 +55,4 @@ The test drives the real app window against the live voice service (18 checks). 
 ## Known limitations
 - Builds are unsigned, so you'll see the first-run warning above.
 - No auto-update yet: download the newest release to update.
+- dan-tts uses Microsoft Edge's Read Aloud service unofficially, the way the edge-tts library does. It is for personal use, is not affiliated with Microsoft, and can stop working at any time. See [`docs/edge-terms-decision.md`](../docs/edge-terms-decision.md) for what is and isn't distributed publicly.

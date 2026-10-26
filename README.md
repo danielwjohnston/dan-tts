@@ -67,7 +67,7 @@ docker run --rm -p 8000:8000 dan-tts
 
 ## Notes
 
-- Edge TTS uses Microsoft online voices; subject to Microsoft availability/changes.
+- dan-tts uses Microsoft Edge's Read Aloud service unofficially, the way the edge-tts library does. It is for personal use, is not affiliated with Microsoft, and can stop working at any time. See [`docs/edge-terms-decision.md`](docs/edge-terms-decision.md) for what is and isn't distributed publicly.
 - Large inputs: chunk on the client if needed; this simple service streams a single request.
 
 ## GitHub Pages
