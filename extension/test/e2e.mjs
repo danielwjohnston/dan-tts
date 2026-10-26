@@ -415,8 +415,10 @@ try {
   await page.waitForFunction(() => document.querySelector('dan-tts-root').shadowRoot.querySelector('.voice optgroup[label^="ElevenLabs"]'), null, { timeout: 20000 });
   const serverOption = await shadow(`const o = root.querySelector('.voice optgroup[label^="ElevenLabs"] option'); return o && [o.value, o.textContent, root.querySelector('.voice').value];`);
   check('server voice: listed under its provider and selected', !!serverOption && serverOption[0] === 'eleven:testvoice01' && /Test Narrator/.test(serverOption[1]) && serverOption[2] === 'eleven:testvoice01', JSON.stringify(serverOption));
-  // The second chunk is fetched later (once the first is mostly played), exactly once
-  await page.waitForFunction(() => false, null, { timeout: 6000 }).catch(() => {});
+  // The second chunk is fetched later (once the first is mostly played, or when it ends), exactly once.
+  // CI machines play audio at an uneven pace, so wait for it rather than assuming a fixed delay.
+  for (let i = 0; i < 200 && serverRequests.length < 2; i++) await page.waitForTimeout(100);
+  await page.waitForTimeout(500); // a third request would be the bug this check exists for
   check('server voice: the next chunk is fetched once, later', serverRequests.length === 2 && serverRequests[1].text !== serverRequests[0].text && /Beyond the mill|cairn|The way back/.test(serverRequests[1].text), `${serverRequests.length} request(s)`);
   await page.keyboard.press('Escape');
   await sw.evaluate(async () => { await chrome.storage.sync.set({ voice: 'en-US-AriaNeural' }); await chrome.storage.sync.remove('server'); });
