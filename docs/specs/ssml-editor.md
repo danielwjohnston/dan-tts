@@ -1,6 +1,7 @@
 # Spec: SSML editor
 
-Status: Phase 1 built (2026-10-26): `static/markup.js` and the tester's "Markup tokens" switch; see §11.
+Status: Phase 1 built (2026-10-26): `static/markup.js` and the tester's "Markup tokens" switch. Phase 2's toolbar and
+preview built (2026-10-26). See §11.
 Roadmap item: Medium-Term, "SSML support"
 
 ## 1. Summary
@@ -167,7 +168,9 @@ Superseded by §11 for the mechanics (no SSML is sent; tokens are lowered per pr
 
 1. **Phase 1 (done, 2026-10-26):** `static/markup.js` and the tester's "Markup tokens" switch, with unit tests in
    `tests/markup.test.js`. Applies to the Synthesize button and the Batch panel.
-2. **Phase 2:** the insert toolbar (§5.5), a text preview (§5.3) and saved markup in the tester's history (§5.6).
+2. **Phase 2 (toolbar and preview done, 2026-10-26):** the insert toolbar (§5.5) and the text preview (§5.3) in the
+   tester, with the edits as tested pure functions in `static/markup.js`; see §11. Saved markup in the tester's history
+   (§5.6) remains.
 3. **Phase 3:** the extension's Markup option and saved markup in its library (§5.5, §5.6).
 
 Each phase is a separate PR, following the pattern of recent merged PRs.
@@ -203,6 +206,21 @@ synthesis, in the Synthesize button and the Batch panel; exports reuse that read
 the exported `text` carry the written text. Highlighting and captions show the spoken words (the server's word
 boundaries), as §6.5 says.
 
+**Phase 2** added the toolbar, under the switch and shown only while it is on. **Pause** is a small menu (400 ms,
+800 ms, 1.5 s, 3 s) that inserts `[pause 800ms]` or `[pause 1.5s]` at the caret, spaced from the words around it.
+**Respell** turns the selected word, or the word at the caret, into `word[say: word]` with the respelling selected, so
+typing replaces it; with several words selected the last one is used and the log line says so; on a word that already
+has a respelling, that respelling is selected instead. **Spell out** wraps the selection in `[spell: …]` (surrounding
+whitespace and glued punctuation stay outside), or inserts `[spell: ]` with the caret inside. **Preview** reads the
+selection, or the first 300 characters (cut at a word end, never inside a token), lowered for the chosen voice, as one
+MP3 request to `/synthesize`, in the page's player; one request at a time, "Previewing..." then "Preview: N characters"
+in the log line, errors shown like the other buttons. The "Preview voice" button (a fixed sentence) is unchanged. The
+edits are pure functions in `static/markup.js` (`pauseEdit`, `sayEdit`, `spellEdit`, `previewSlice`, `pauseToken`),
+each returning the range to replace and the selection to set, tested in `tests/markup.test.js`; the tester applies them
+with `setRangeText`, so undo works, fires an input event so the counter follows, and refocuses the text box. The buttons
+are plain `<button type="button">` elements: Tab and Enter work, Escape closes the pause menu. A one-line help under the
+toolbar says what the three tokens do and that Edge voices get punctuation for a pause while ElevenLabs voices get a
+real one. Nothing new is stored: the switch's own setting shows or hides the toolbar.
+
 Not yet: emphasis, rate, pitch and volume spans (Edge cannot take them per span; ElevenLabs has no tag for
-them), the insert toolbar (§5.5), a text preview (§5.3), saved markup in the tester's history and the extension's
-library (§5.6), and the extension itself (§9 phase 3).
+them), saved markup in the tester's history and the extension's library (§5.6), and the extension itself (§9 phase 3).
