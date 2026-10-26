@@ -45,6 +45,17 @@ Two things that look right but are not. A **Build variable** (Settings → Build
 
 `/usage` reports the month's remaining credits (the tester shows them under the voice picker, and the health check logs them). Voice ids are `eleven:<voice_id>`, so a request with such a voice goes to ElevenLabs and anything else goes to Edge. Each request is limited to 5,000 characters (the tester splits long text into paragraphs anyway). When the month's credits are gone the server answers 429 with a plain message and Edge voices keep working. Locally, put `ELEVENLABS_API_KEY=...` in `worker/.dev.vars` (ignored by git) and `wrangler dev` picks it up.
 
+## Voice providers: adding Speechify
+
+Speechify voices work the same way: they appear as `speechify:<voice_id>` as soon as the Worker has an API key, and the key stays on the server.
+
+1. Get a key in the Speechify console (an `sk_...` key). Speechify bills per spoken character; SSML tags are not counted.
+2. Cloudflare dashboard → Workers & Pages → **dan-tts** → **Settings** → **Variables and Secrets** → **Add**. Type **Secret**, name `SPEECHIFY_API_KEY`, paste the key, **Deploy**. Production already has this secret; add it under **Previews Base** too if previews should speak with Speechify voices.
+3. Optional secrets: `SPEECHIFY_MODEL` (default `simba-3.5`, the model Speechify recommends; `simba-3.2` is English only and `simba-3.0` covers six languages; `simba-english` and `simba-multilingual` are retired and answer `400 model_retired`), `SPEECHIFY_LANGUAGE` (an ISO code such as `fr-FR`, sent with every request when the text's language differs from the voice's locale; leave unset to use the voice's locale), and `SPEECHIFY_API_URL` (`https://eu.api.speechify.ai` or `https://us.api.speechify.ai` to pin a region; default `https://api.speechify.ai`).
+4. Check: `/health` now lists `"speechify"` among the providers, and the tester lists the workspace's voices for the configured model under "Speechify voices", each with its preview clip.
+
+Timed speech (`/synthesize_with_timing`, `/export`, the reader's highlighting) uses Speechify's `POST /v1/audio/speech`, which returns the audio with word-level speech marks and takes 2,000 spoken characters per request; the tester and the extension split longer text. Plain `/synthesize` uses `POST /v1/audio/stream`, which returns the bytes directly and takes 20,000. Markup tokens become real SSML here: a pause is a `<break>` and a respelling a `<sub>`, with the rest of the text escaped and wrapped in `<speak>`; hand-written SSML in the text is spoken as written. `/usage` does not report Speechify spend. Locally, put `SPEECHIFY_API_KEY=...` in `worker/.dev.vars` (ignored by git).
+
 ## Limits
 - The free plan limits CPU time per request (Cloudflare's limits change, so check their docs). Waiting on Microsoft doesn't count toward it. Requests are capped at 20,000 characters, and the tester splits long text into paragraphs anyway.
 - Load from URL can't reach sites that block automated access (it says so, with an "Open in browser" link), and pages built entirely in JavaScript give only their description. The browser extension reads such pages in place.

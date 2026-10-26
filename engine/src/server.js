@@ -4,7 +4,7 @@
 
 export const DEFAULT_SERVER = 'https://dan-tts.macdaddydwj.workers.dev';
 
-/** Provider voice ids carry a prefix ("eleven:<id>"); Edge ids ("en-US-AriaNeural") have no colon. */
+/** Provider voice ids carry a prefix ("eleven:<id>", "speechify:<id>"); Edge ids ("en-US-AriaNeural") have no colon. */
 export const isServerVoice = (voice) => /^[a-z][a-z0-9]*:/i.test(String(voice || ''));
 
 /**
@@ -16,7 +16,7 @@ export function serverFor(setting) {
   return String(setting).trim().replace(/\/+$/, '');
 }
 
-const LABELS = { elevenlabs: 'ElevenLabs' };
+const LABELS = { elevenlabs: 'ElevenLabs', speechify: 'Speechify' };
 export const providerLabel = (provider) => LABELS[provider] || (provider ? provider[0].toUpperCase() + provider.slice(1) : 'Server');
 
 /** The server's own explanation of a failure ({"detail": "..."}), else the status. */

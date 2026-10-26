@@ -203,3 +203,96 @@ test('/usage reports Edge as unlimited and ElevenLabs credits when configured', 
   await Promise.all([callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage'), callWith(ELEVEN_ENV, '/usage')]);
   assert.strictEqual(upstream, 1);
 });
+
+// ---- Speechify provider through the routes (fetch and the cache are stubbed) ----
+const SPEECHIFY_ENV = { SPEECHIFY_API_KEY: 'sk_test' };
+const SPEECHIFY_AUDIO_B64 = Buffer.from('ID3speechify').toString('base64');
+const SPEECHIFY_MARKS = { chunks: [{ value: 'Hi', start_time: 0, end_time: 200 }] };
+
+function stubSpeechify(t, { voicesStatus = 200 } = {}) {
+  const realFetch = globalThis.fetch;
+  const realCaches = globalThis.caches;
+  const seen = [];
+  globalThis.caches = { default: { match: async () => undefined, put: async () => {} } };
+  globalThis.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const json = (d, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'Content-Type': 'application/json' } });
+    seen.push({ url, init });
+    if (url.startsWith('https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list')) return json(EDGE_VOICES);
+    if (url.startsWith('https://api.speechify.ai/v1/voices?')) {
+      assert.strictEqual(init.headers.Authorization, 'Bearer sk_test');
+      if (voicesStatus !== 200) return json({ error: { code: 'unauthorized', message: 'bad key' } }, voicesStatus);
+      return json({ voices: [{ id: 'geffen_32', display_name: 'Geffen', type: 'shared', gender: 'male', locale: 'en-US', models: [], preview_audio: 'https://cdn.example/geffen.mp3' }], has_more: false });
+    }
+    if (url === 'https://api.speechify.ai/v1/audio/speech') {
+      assert.strictEqual(init.headers.Authorization, 'Bearer sk_test');
+      return json({ audio_data: SPEECHIFY_AUDIO_B64, audio_format: 'mp3', billable_characters_count: 2, speech_marks: SPEECHIFY_MARKS });
+    }
+    if (url === 'https://api.speechify.ai/v1/audio/stream') return new Response('ID3stream', { headers: { 'Content-Type': 'audio/mpeg' } });
+    if (url === 'https://cdn.example/geffen.mp3') return new Response('ID3preview', { headers: { 'Content-Type': 'audio/mpeg' } });
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  t.after(() => { globalThis.fetch = realFetch; globalThis.caches = realCaches; });
+  return seen;
+}
+
+test('/health lists the Speechify provider only when a key is configured', async () => {
+  assert.deepStrictEqual((await callWith(SPEECHIFY_ENV, '/health').then((r) => r.json())).providers, ['edge', 'speechify']);
+  assert.deepStrictEqual((await callWith({ ...ELEVEN_ENV, ...SPEECHIFY_ENV }, '/health').then((r) => r.json())).providers, ['edge', 'elevenlabs', 'speechify']);
+});
+
+test('/voices merges Speechify voices, filtered by the configured model, with a provider field', async (t) => {
+  const seen = stubSpeechify(t);
+  const served = await callWith({ ...SPEECHIFY_ENV, SPEECHIFY_MODEL: 'simba-3.2' }, '/voices').then((r) => r.json());
+  assert.deepStrictEqual(served.map((v) => [v.shortName, v.provider, v.sampleUrl]), [
+    ['en-US-AriaNeural', 'edge', '/samples/en-US-AriaNeural'],
+    ['speechify:geffen_32', 'speechify', '/samples/speechify:geffen_32'],
+  ]);
+  assert.ok(seen.some((s) => s.url.includes('/v1/voices?limit=200&model=simba-3.2')));
+});
+
+test('/voices still returns Edge voices when the Speechify listing fails, uncached', async (t) => {
+  stubSpeechify(t, { voicesStatus: 401 });
+  const res = await callWith(SPEECHIFY_ENV, '/voices');
+  assert.strictEqual(res.headers.get('cache-control'), 'no-store');
+  assert.deepStrictEqual((await res.json()).map((v) => v.provider), ['edge']);
+});
+
+test('speechify: voices use the speech endpoint for timings and export, the stream endpoint for plain audio, and the preview for samples', async (t) => {
+  const seen = stubSpeechify(t);
+  const body = { text: 'Hi', voice: 'speechify:geffen_32' };
+  const timing = await callWith(SPEECHIFY_ENV, '/synthesize_with_timing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json());
+  assert.strictEqual(Buffer.from(timing.audio, 'base64').toString(), 'ID3speechify');
+  assert.deepStrictEqual(timing.boundaries, [{ offset: 0, duration: 2_000_000, text: 'Hi' }]);
+  const sent = JSON.parse(seen.find((s) => s.url.endsWith('/v1/audio/speech')).init.body);
+  assert.deepStrictEqual(sent, { input: 'Hi', voice_id: 'geffen_32', model: 'simba-3.5', audio_format: 'mp3' });
+  const exported = await callWith(SPEECHIFY_ENV, '/export?format=srt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.match(await exported.text(), /00:00:00,000 --> 00:00:00,200\nHi/);
+  const plain = await callWith(SPEECHIFY_ENV, '/synthesize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  assert.strictEqual(await plain.text(), 'ID3stream');
+  assert.strictEqual(plain.headers.get('content-type'), 'audio/mpeg');
+  const sample = await callWith(SPEECHIFY_ENV, '/samples/speechify:geffen_32');
+  assert.strictEqual(await sample.text(), 'ID3preview');
+});
+
+test('SPEECHIFY_MODEL, SPEECHIFY_LANGUAGE and SPEECHIFY_API_URL reach the Speechify request', async (t) => {
+  const realFetch = globalThis.fetch;
+  let seen;
+  globalThis.fetch = async (input, init) => {
+    seen = { url: typeof input === 'string' ? input : input.url, body: JSON.parse(init.body) };
+    return new Response(JSON.stringify({ audio_data: SPEECHIFY_AUDIO_B64, speech_marks: SPEECHIFY_MARKS }), { headers: { 'Content-Type': 'application/json' } });
+  };
+  t.after(() => { globalThis.fetch = realFetch; });
+  await callWith({ ...SPEECHIFY_ENV, SPEECHIFY_MODEL: 'simba-3.2', SPEECHIFY_LANGUAGE: 'fr-FR', SPEECHIFY_API_URL: 'https://eu.api.speechify.ai' }, '/synthesize_with_timing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'Salut', voice: 'speechify:geffen_32' }) });
+  assert.strictEqual(seen.url, 'https://eu.api.speechify.ai/v1/audio/speech');
+  assert.deepStrictEqual(seen.body, { input: 'Salut', voice_id: 'geffen_32', model: 'simba-3.2', audio_format: 'mp3', language: 'fr-FR' });
+});
+
+test('speechify: voices are rejected clearly when no key is configured', async () => {
+  const res = await post('/synthesize', { text: 'Hi', voice: 'speechify:geffen_32' });
+  assert.strictEqual(res.status, 503);
+  assert.match((await res.json()).detail, /SPEECHIFY_API_KEY/);
+  assert.strictEqual((await call('/samples/speechify:geffen_32')).status, 503);
+  assert.strictEqual((await post('/synthesize', { text: 'Hi', voice: 'speechify:bad id' })).status, 400);
+  assert.strictEqual((await callWith(SPEECHIFY_ENV, '/synthesize_with_timing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'x'.repeat(2001), voice: 'speechify:geffen_32' }) })).status, 422);
+});

@@ -50,7 +50,7 @@ Two lenses change the plan outright: Ockham puts Azure on the existing engine in
 
 **Done when:** the tester lists ElevenLabs voices beside Edge voices, reads with highlighting, exports captions; offline tests cover the adapter and routing on both servers; the health check lists voices from every configured provider; READMEs say where the key goes and what the free plan allows.
 
-**Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Azure is next and needs a key.
+**Status (2026-10-26, later):** Speechify is a third provider: `speechify:<voice_id>` on both servers behind `SPEECHIFY_API_KEY`, `simba-3.5` by default, speech marks as word boundaries, the stream endpoint for plain audio, previews as samples; `/usage` does not report it yet. **Status (2026-10-26):** the ElevenLabs half is built: `worker/src/elevenlabs.js` and the `_eleven_*` helpers in `app/main.py`, routing by the `eleven:` prefix, `/health.providers`, previews as samples (no credits), the tester's provider labels and quota note, provider voices in the health check, and offline tests on both servers. Azure is next and needs a key.
 
 ### B. Markup editor
 

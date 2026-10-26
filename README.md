@@ -38,6 +38,8 @@ uvicorn app.main:app --reload --port 8000
 
 Optional: set `ELEVENLABS_API_KEY` in the environment (and `ELEVENLABS_MODEL`, default `eleven_multilingual_v2`) and the account's ElevenLabs voices join the Edge voices as `eleven:<voice_id>`. `/health` lists the providers in use and `/usage` reports this month's remaining ElevenLabs credits (the tester shows them under the voice picker). The key is only ever read on the server; see `worker/README.md` for the Cloudflare steps and what the free plan allows.
 
+Optional: set `SPEECHIFY_API_KEY` and the workspace's Speechify voices join as `speechify:<voice_id>` (`SPEECHIFY_MODEL`, default `simba-3.5`; `SPEECHIFY_LANGUAGE`, e.g. `fr-FR`, when the text's language differs from the voice's locale; `SPEECHIFY_API_URL` to pin the `eu.` or `us.` region). Timed speech uses Speechify's `/v1/audio/speech` with word-level speech marks (2,000 spoken characters per request; the tester splits longer text), plain `/synthesize` uses `/v1/audio/stream` (20,000). The key is sent as a Bearer token and never leaves the server; put it in the environment, never in the repo. See `worker/README.md` for the Cloudflare steps.
+
 ## Usage
 
 Example (mp3):
@@ -95,7 +97,7 @@ on every push to `main` and preview every other branch; the build step assembles
 1. Sign in at https://render.com with GitHub (no card needed for the free plan).
 2. **New → Blueprint**, pick this repo, and click **Apply**.
 3. Copy the service URL (e.g. `https://dan-tts.onrender.com`) into the **API Base URL** box on the GitHub Pages tester.
-4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices.
+4. Optional: the service's **Environment** tab → add `ELEVENLABS_API_KEY` to enable ElevenLabs voices, and `SPEECHIFY_API_KEY` to enable Speechify voices.
 
 Free services sleep after ~15 minutes idle; the first request afterwards takes ~30–60s to wake up.
 

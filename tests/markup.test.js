@@ -100,3 +100,18 @@ test('strip() returns token-free text exactly as it was, and tidies only around 
   assert.strictEqual(strip('and then [pause]. Next.'), 'and then. Next.');
   assert.strictEqual(strip('one [pause] two  spaced'), 'one two  spaced');
 });
+
+test('Speechify gets SSML: millisecond break tags and escaped <sub> respellings', () => {
+  assert.strictEqual(providerOf('speechify:geffen_32'), 'speechify');
+  assert.strictEqual(lower('Turn left [pause] at the mill.', 'speechify'), 'Turn left <break time="400ms"/> at the mill.');
+  assert.strictEqual(lower('Wait [pause 5s] here', 'speechify:geffen_32'), 'Wait <break time="5000ms"/> here');
+  assert.strictEqual(lower('and then [pause]. Next.', 'speechify'), 'and then. <break time="400ms"/> Next.');
+  assert.strictEqual(lower('the kernel[say: Ker-nel] panicked', 'speechify'), 'the <sub alias="Ker-nel">kernel</sub> panicked');
+  assert.strictEqual(lower('"kernel"[say: Ker-"nel"] & co', 'speechify'), '"<sub alias="Ker-&quot;nel&quot;">kernel</sub>" & co');
+  assert.strictEqual(lower('[say: Hello] there', 'speechify'), 'Hello there');          // nothing written: spoken as it stands
+  assert.strictEqual(lower('the kernel[say:] panicked', 'speechify'), 'the kernel panicked'); // empty respelling: no tag
+  assert.strictEqual(lower('Say [spell: SSML] clearly.', 'speechify'), 'Say S S M L clearly.');
+  assert.strictEqual(lower('The end [pause]', 'speechify'), 'The end');
+  const plain = 'Turn left [1] at the mill & back.';
+  assert.strictEqual(lower(plain, 'speechify'), plain);
+});

@@ -19,6 +19,7 @@ test('serverFor: unset means the default, empty means off, otherwise the URL wit
   assert.strictEqual(serverFor(''), '');
   assert.strictEqual(serverFor('  http://127.0.0.1:8787/// '), 'http://127.0.0.1:8787');
   assert.strictEqual(providerLabel('elevenlabs'), 'ElevenLabs');
+  assert.strictEqual(providerLabel('speechify'), 'Speechify');
   assert.strictEqual(providerLabel('azure'), 'Azure');
 });
 

@@ -30,6 +30,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 from starlette.responses import FileResponse, Response
 
+from app import speechify
+
 SUPPORTED_FORMATS = Literal["mp3", "m4a", "ogg", "flac"]
 DEFAULT_VOICE = "en-US-AriaNeural"
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -88,11 +90,11 @@ class ExtractTextRequest(BaseModel):
 
 
 def _valid_voice(voice: str) -> bool:
-    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice))
+    return bool(VOICE_NAME_RE.match(voice) or ELEVEN_ID_RE.match(voice) or speechify.ID_RE.match(voice))
 
 
 def _providers() -> list[str]:
-    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else [])
+    return ["edge"] + (["elevenlabs"] if ELEVENLABS_API_KEY else []) + (["speechify"] if speechify.API_KEY else [])
 
 
 def _eleven_error(status: int, body: str) -> HTTPException:
@@ -135,28 +137,28 @@ async def _eleven_request(method: str, path: str, json_body: Optional[dict] = No
         raise HTTPException(status_code=504, detail="ElevenLabs timed out")
 
 
-async def _eleven_fetch_bytes(url: str) -> bytes:
-    """Download a preview clip. The URL comes from the provider's listing, so it gets the same public-host
-    check as Load from URL, must be https, may not redirect, and is capped in size."""
+async def _eleven_fetch_bytes(url: str, provider: str = "ElevenLabs") -> bytes:
+    """Download a provider's preview clip. The URL comes from the provider's listing, so it gets the same
+    public-host check as Load from URL, must be https, may not redirect, and is capped in size."""
     if urlparse(url).scheme != "https":
-        raise HTTPException(status_code=502, detail="ElevenLabs preview URL is not https")
+        raise HTTPException(status_code=502, detail=f"{provider} preview URL is not https")
     try:
         await _assert_public_host(url)
     except HTTPException:
-        raise HTTPException(status_code=502, detail="ElevenLabs preview URL points at a host this server will not fetch")
+        raise HTTPException(status_code=502, detail=f"{provider} preview URL points at a host this server will not fetch")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
             async with session.get(url, allow_redirects=False) as resp:
                 if resp.status != 200:
-                    raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: HTTP {resp.status}")
+                    raise HTTPException(status_code=502, detail=f"{provider} preview failed: HTTP {resp.status}")
                 body = await resp.content.read(MAX_FETCH_BYTES + 1)
                 if len(body) > MAX_FETCH_BYTES:
-                    raise HTTPException(status_code=502, detail="ElevenLabs preview clip is too large")
+                    raise HTTPException(status_code=502, detail=f"{provider} preview clip is too large")
                 return body
     except aiohttp.ClientError as exc:
-        raise HTTPException(status_code=502, detail=f"ElevenLabs preview failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"{provider} preview failed: {exc}")
     except (asyncio.TimeoutError, TimeoutError):
-        raise HTTPException(status_code=504, detail="ElevenLabs preview timed out")
+        raise HTTPException(status_code=504, detail=f"{provider} preview timed out")
 
 
 def _title(s: str) -> str:
@@ -307,6 +309,9 @@ async def synthesize_mp3(text: str, voice: str) -> bytes:
     if voice.startswith(ELEVEN_PREFIX):
         audio, _ = await _eleven_synthesize(text, voice)
         return audio
+    if speechify.is_speechify_voice(voice):
+        # No timings wanted: Speechify's stream endpoint takes ten times more text than its timed one
+        return await speechify.stream_mp3(text, voice)
     communicator = edge_tts.Communicate(text, voice=voice)
     audio_chunks = []
     async for chunk in communicator.stream():
@@ -320,6 +325,8 @@ async def synthesize_mp3(text: str, voice: str) -> bytes:
 async def synthesize_with_boundaries(text: str, voice: str):
     if voice.startswith(ELEVEN_PREFIX):
         return await _eleven_synthesize(text, voice)
+    if speechify.is_speechify_voice(voice):
+        return await speechify.synthesize(text, voice)
     communicator = edge_tts.Communicate(text, voice=voice, boundary="WordBoundary")
     audio_chunks = []
     boundaries = []
@@ -388,7 +395,35 @@ async def list_voices() -> list[dict]:
             for v in voices
             if v.get("Locale") == "en-US"
         ]
-    return _voice_cache + await _eleven_voices_cached()
+    return _voice_cache + await _eleven_voices_cached() + await _speechify_voices_cached()
+
+
+_speechify_voice_cache: Optional[List[Dict]] = None
+
+
+async def _speechify_voices_cached() -> list[dict]:
+    """Speechify voices when a key is set. A failed listing is not cached and does not hide the Edge list."""
+    global _speechify_voice_cache
+    if not speechify.API_KEY:
+        return []
+    if _speechify_voice_cache is None:
+        try:
+            _speechify_voice_cache = await speechify.voices(speechify.API_KEY)
+        except HTTPException as exc:
+            print(f"Speechify voice list unavailable: {exc.detail}")
+            return []
+        except Exception as exc:  # a malformed listing must not take the Edge voices down with it
+            print(f"Speechify voice list unavailable: {exc!r}")
+            return []
+    return _speechify_voice_cache
+
+
+async def _speechify_voices_strict() -> list[dict]:
+    """The Speechify voices, or the real error when the listing fails (for /samples, which must say why)."""
+    global _speechify_voice_cache
+    if _speechify_voice_cache is None:
+        _speechify_voice_cache = await speechify.voices(speechify.API_KEY)
+    return _speechify_voice_cache
 
 
 async def _eleven_voices_cached() -> list[dict]:
@@ -443,10 +478,11 @@ async def pre_render_samples():
 
 @app.get("/voices")
 async def voices(refresh: bool = False):
-    global _voice_cache, _eleven_voice_cache
+    global _voice_cache, _eleven_voice_cache, _speechify_voice_cache
     if refresh:
         _voice_cache = None
         _eleven_voice_cache = None
+        _speechify_voice_cache = None
     voices = await list_voices()
     for v in voices:
         v["sampleUrl"] = f"/samples/{v['shortName']}"
@@ -506,10 +542,20 @@ async def synthesize_with_timing(payload: SynthesisRequest):
 
 async def ensure_sample(voice: str) -> Path:
     SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
-    sample_path = SAMPLES_DIR / (f"eleven-{voice[len(ELEVEN_PREFIX):]}.mp3" if voice.startswith(ELEVEN_PREFIX) else f"{voice}.mp3")
+    if voice.startswith(ELEVEN_PREFIX):
+        sample_path = SAMPLES_DIR / f"eleven-{voice[len(ELEVEN_PREFIX):]}.mp3"
+    elif speechify.is_speechify_voice(voice):
+        sample_path = SAMPLES_DIR / f"speechify-{voice[len(speechify.PREFIX):]}.mp3"
+    else:
+        sample_path = SAMPLES_DIR / f"{voice}.mp3"
     if sample_path.exists():
         return sample_path
-    if voice.startswith(ELEVEN_PREFIX):
+    if speechify.is_speechify_voice(voice):
+        # The provider's own preview clip, so a sample costs nothing
+        if not speechify.API_KEY:
+            raise HTTPException(status_code=503, detail="Speechify voices are not configured on this server (no SPEECHIFY_API_KEY)")
+        audio = await speechify.sample(speechify.API_KEY, voice, await _speechify_voices_strict(), lambda url: _eleven_fetch_bytes(url, "Speechify"))
+    elif voice.startswith(ELEVEN_PREFIX):
         # The provider's own preview clip, so a sample costs no credits
         if not ELEVENLABS_API_KEY:
             raise HTTPException(status_code=503, detail="ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)")

@@ -9,7 +9,9 @@
 // token cannot swallow the paragraphs after it. Edge voices take no SSML, so a pause becomes
 // punctuation (a comma, a full stop, or a paragraph break, which the tester then synthesizes as
 // its own request) and a respelling replaces the word; ElevenLabs takes an inline
-// <break time="0.4s" /> tag (3 s at most) and the same respellings. strip() gives the written
+// <break time="0.4s" /> tag (3 s at most) and the same respellings; Speechify takes SSML, so a
+// pause is <break time="800ms"/> and a respelling <sub alias="spoken">written</sub> (the server
+// escapes the rest of the text and wraps it in <speak>). strip() gives the written
 // text with the tokens removed; nothing displays it yet (highlighting and captions show the
 // spoken words), it is here for the display and caption path to come.
 (function (root) {
@@ -18,12 +20,12 @@
   // The word a respelling applies to: the run before the token, split into its core and the
   // punctuation glued to its end (kept in both the written and the spoken text)
   const WORD_BEFORE = /(\S*?)([^\p{L}\p{N}\s]*)$/u;
-  const PROVIDERS = ['edge', 'elevenlabs'];
+  const PROVIDERS = ['edge', 'elevenlabs', 'speechify'];
   const str = (v) => (v == null ? '' : String(v));
 
-  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, anything else is Edge. */
+  /** Which provider a voice id belongs to: "eleven:<id>" is ElevenLabs, "speechify:<id>" is Speechify, anything else is Edge. */
   function providerOf(voice) {
-    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : 'edge';
+    return /^eleven:/i.test(str(voice)) ? 'elevenlabs' : /^speechify:/i.test(str(voice)) ? 'speechify' : 'edge';
   }
 
   /** Text → segments: {type:'text', text} | {type:'pause', ms} | {type:'say', written, spoken} | {type:'spell', letters}. */
@@ -94,6 +96,10 @@
   }
 
   const breakTag = (ms) => `<break time="${(Math.min(ELEVEN_BREAK_MAX, ms) / 1000).toFixed(2).replace(/0$/, '')}s" />`;
+  // Speechify reads SSML: whole milliseconds, and the respelling as a <sub> whose attribute and text are escaped
+  const xml = (s) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+  const speechifyBreak = (ms) => `<break time="${ms}ms"/>`;
+  const speechifySub = (written, spoken) => (written && written !== spoken ? `<sub alias="${xml(spoken)}">${xml(written)}</sub>` : spoken);
 
   /** The text a provider should be sent. */
   function lower(input, provider) {
@@ -102,7 +108,7 @@
     let out = '';
     segs.forEach((s, i) => {
       if (s.type === 'text') { out += s.text; return; }
-      if (s.type === 'say') { out += s.spoken; return; }
+      if (s.type === 'say') { out += provider === 'speechify' ? speechifySub(s.written, s.spoken) : s.spoken; return; }
       if (s.type === 'spell') { out += spellOut(s.letters); return; }
       // A pause. Punctuation written right after it belongs to the word before it: "word [pause]." → "word."
       const next = segs[i + 1];
@@ -111,6 +117,7 @@
       const rest = segs.slice(i + 1).some((r) => r.type !== 'text' || r.text.trim());
       if (!rest) return; // nothing is spoken after it
       if (provider === 'elevenlabs') out = out.replace(/\s+$/, '') + ` ${breakTag(s.ms)} `;
+      else if (provider === 'speechify') out = out.replace(/\s+$/, '') + ` ${speechifyBreak(s.ms)} `;
       else out = out.replace(/[ \t]+$/, '') + edgePause(out, s.ms);
     });
     return out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();

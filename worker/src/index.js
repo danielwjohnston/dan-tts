@@ -1,14 +1,16 @@
 // dan-tts API on Cloudflare Workers. Mirrors the Python server's endpoints so the
 // tester (and anything else) can switch by changing the API base URL. Uses the shared
-// engine to talk to Microsoft's voice service directly, and ElevenLabs when the
-// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>").
+// engine to talk to Microsoft's voice service directly, ElevenLabs when the
+// ELEVENLABS_API_KEY secret is set (voices "eleven:<id>"), and Speechify when
+// SPEECHIFY_API_KEY is set (voices "speechify:<id>").
 import { synthesize, connectionHeaders, listVoices } from '../../engine/src/tts.js';
 import { extractText, HttpError } from './extract.js';
 import * as eleven from './elevenlabs.js';
+import * as speechify from './speechify.js';
 
 const MAX_TEXT_CHARS = 20000;
-const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs
-const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice);
+const VOICE_NAME_RE = /^[A-Za-z]{2,3}-[A-Za-z]{2,4}-[A-Za-z]+Neural$/; // Edge voices; "eleven:<id>" is ElevenLabs, "speechify:<id>" is Speechify
+const validVoice = (voice) => VOICE_NAME_RE.test(voice) || eleven.ID_RE.test(voice) || speechify.ID_RE.test(voice);
 const SAMPLE_TEXT = 'This is a sample of the selected voice.';
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS' };
 
@@ -48,11 +50,16 @@ async function readRequest(request) {
   return { text, voice, format };
 }
 
-// Route by provider: ElevenLabs ids carry a prefix, everything else is an Edge voice
+// Route by provider: ElevenLabs and Speechify ids carry a prefix, everything else is an Edge voice
+const speechifyOptions = (env) => ({ key: env.SPEECHIFY_API_KEY, model: env.SPEECHIFY_MODEL || speechify.DEFAULT_MODEL, language: env.SPEECHIFY_LANGUAGE || '', api: env.SPEECHIFY_API_URL || speechify.DEFAULT_API });
 const tts = (text, voice, env) => eleven.isElevenVoice(voice)
   ? eleven.synthesize(text, voice, { key: env.ELEVENLABS_API_KEY, model: env.ELEVENLABS_MODEL || eleven.DEFAULT_MODEL })
-  : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
-const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : [])];
+  : speechify.isSpeechifyVoice(voice)
+    ? speechify.synthesize(text, voice, speechifyOptions(env))
+    : synthesize(text, { voice, openSocket }).catch((e) => { throw e instanceof HttpError ? e : new HttpError(502, `Voice service error: ${e.message}`); });
+// Plain audio with no timings: Speechify's stream endpoint takes ten times more text than its timed one
+const ttsPlain = (text, voice, env) => speechify.isSpeechifyVoice(voice) ? speechify.stream(text, voice, speechifyOptions(env)) : tts(text, voice, env);
+const providers = (env) => ['edge', ...(env.ELEVENLABS_API_KEY ? ['elevenlabs'] : []), ...(env.SPEECHIFY_API_KEY ? ['speechify'] : [])];
 
 // ---- Captions (same format as the Python server) ----
 const pad = (n, w = 2) => String(n).padStart(w, '0');
@@ -102,6 +109,10 @@ async function route(request, env, ctx) {
         try { voices.push(...await eleven.listVoices(env.ELEVENLABS_API_KEY)); }
         catch (e) { console.error(`ElevenLabs voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
       }
+      if (env.SPEECHIFY_API_KEY) {
+        try { voices.push(...await speechify.listVoices(env.SPEECHIFY_API_KEY, speechifyOptions(env))); }
+        catch (e) { console.error(`Speechify voice list unavailable: ${e.message}`); return json(voices, 200, { 'Cache-Control': 'no-store' }); }
+      }
       return json(voices);
     }, { variant: providers(env).join(',') });
   }
@@ -127,10 +138,15 @@ async function route(request, env, ctx) {
     const voice = decodeURIComponent(sample[1]);
     if (!validVoice(voice)) throw new HttpError(400, 'Invalid voice name');
     if (eleven.isElevenVoice(voice) && !env.ELEVENLABS_API_KEY) throw new HttpError(503, 'ElevenLabs voices are not configured on this server (no ELEVENLABS_API_KEY)');
+    if (speechify.isSpeechifyVoice(voice) && !env.SPEECHIFY_API_KEY) throw new HttpError(503, 'Speechify voices are not configured on this server (no SPEECHIFY_API_KEY)');
     // variant "audio": samples cached before the content-type fix (text/plain previews) are not reused
     return cached(request, ctx, 7 * 86400, async () => {
       if (eleven.isElevenVoice(voice)) {
         const { audio, contentType } = await eleven.sample(env.ELEVENLABS_API_KEY, voice);
+        return new Response(audio, { headers: { ...CORS, 'Content-Type': contentType } });
+      }
+      if (speechify.isSpeechifyVoice(voice)) {
+        const { audio, contentType } = await speechify.sample(env.SPEECHIFY_API_KEY, voice, speechifyOptions(env));
         return new Response(audio, { headers: { ...CORS, 'Content-Type': contentType } });
       }
       const { audio } = await tts(SAMPLE_TEXT, voice, env);
@@ -140,7 +156,7 @@ async function route(request, env, ctx) {
 
   if (request.method === 'POST' && path === '/synthesize') {
     const { text, voice } = await readRequest(request);
-    const { audio } = await tts(text, voice, env);
+    const { audio } = await ttsPlain(text, voice, env);
     return new Response(audio, { headers: { ...CORS, 'Content-Type': 'audio/mpeg' } });
   }
 

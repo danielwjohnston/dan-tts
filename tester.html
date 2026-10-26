@@ -441,7 +441,9 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
       return (shortName || '').replace(/^en-US-/, '').replace(/Neural$/, '').replace(/Multilingual$/, ' ML');
     }
     // Edge voices have names like en-US-AriaNeural; provider voices carry their own display name
-    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices' };
+    const PROVIDER_LABELS = { edge: 'Edge voices', elevenlabs: 'ElevenLabs voices', speechify: 'Speechify voices' };
+    // Speechify's timed endpoint takes 2,000 spoken characters per request; the others take more than a chunk ever is
+    const chunkMax = (voice) => (/^speechify:/i.test(voice || '') ? 2000 : undefined);
     const providerOf = (v) => v.provider || 'edge';
     const displayName = (v) => providerOf(v) === 'edge' ? friendlyName(v.shortName) : (v.name || v.shortName);
     const voiceDetail = (v) => providerOf(v) === 'edge' ? (v.shortName || '') : [PROVIDER_LABELS[providerOf(v)] || providerOf(v), v.localeName].filter(Boolean).join(' · ');
@@ -449,11 +451,12 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     let serverProviders = ['edge'];
     const GENERIC_ELEVEN_NOTE = 'ElevenLabs voices use that account\u2019s monthly credits (free plan: 10,000 a month, about 10 minutes of speech, non-commercial use with attribution). Edge voices have no quota.';
+    const SPEECHIFY_NOTE = 'Speechify voices are billed per spoken character on that workspace; pauses and respellings are sent as SSML. Edge voices have no quota.';
     function showProviderNote() {
       const note = document.getElementById('provider-note');
-      const eleven = serverProviders.includes('elevenlabs');
-      note.style.display = eleven ? '' : 'none';
-      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : '';
+      const eleven = serverProviders.includes('elevenlabs'), speechify = serverProviders.includes('speechify');
+      note.style.display = eleven || speechify ? '' : 'none';
+      note.textContent = eleven ? GENERIC_ELEVEN_NOTE : speechify ? SPEECHIFY_NOTE : '';
       if (eleven) showUsage();
     }
     /* Live credit count from /usage, replacing the generic note when the server can report it */
@@ -768,7 +771,7 @@ ${tag('script')}TTSPlayer.init({ container: '#tts-player', data: ${safe(JSON.str
     /* Text → audio + word timings. Long text is chunked (and always MP3, since only MP3 concatenates). */
     async function synthesizeText(text, voice, format, { separateParagraphs = false } = {}) {
       // With markup on, a long Edge pause is a paragraph break: synthesize each paragraph on its own
-      const chunks = separateParagraphs ? text.split(/\n\s*\n/).filter((p) => p.trim()).flatMap((p) => chunkText(p)) : chunkText(text);
+      const chunks = separateParagraphs ? text.split(/\n\s*\n/).filter((p) => p.trim()).flatMap((p) => chunkText(p, { max: chunkMax(voice) })) : chunkText(text, { max: chunkMax(voice) });
       if (chunks.length > 1) {
         const { blob, boundaries } = await synthesizeChunked(chunks, voice);
         return { blob, boundaries, outFormat: 'mp3', chunks };

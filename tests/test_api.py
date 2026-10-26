@@ -549,3 +549,41 @@ def test_usage_reports_a_failed_lookup_without_failing(client, monkeypatch):
     expires_at, cached = main._eleven_usage_cache
     assert cached == r.json()["elevenlabs"]
     assert 0 < expires_at - time.monotonic() <= main.USAGE_TTL_ERROR  # loop.time() is the monotonic clock
+
+
+# ---- Speechify provider through the routes ----
+SPEECHIFY_VOICE = "speechify:geffen_32"
+
+
+def test_speechify_provider_is_listed_only_with_a_key(client, monkeypatch):
+    monkeypatch.setattr(main.speechify, "API_KEY", "")
+    assert "speechify" not in client.get("/health").json()["providers"]
+    monkeypatch.setattr(main.speechify, "API_KEY", "sk_test")
+    assert client.get("/health").json()["providers"][-1] == "speechify"
+
+
+def test_speechify_voices_route_by_prefix(monkeypatch):
+    """The real synthesizers (not the fixture's fakes) send speechify: voices to the provider module."""
+    seen = []
+
+    async def fake_timed(text, voice, key="", model="", language=None):
+        seen.append(("timed", text, voice))
+        return b"ID3speechify", [{"offset": 0, "duration": 2_000_000, "text": "Hi"}]
+
+    async def fake_stream(text, voice, key="", model="", language=None):
+        seen.append(("stream", text, voice))
+        return b"ID3stream"
+
+    monkeypatch.setattr(main.speechify, "synthesize", fake_timed)
+    monkeypatch.setattr(main.speechify, "stream_mp3", fake_stream)
+    audio, boundaries = asyncio.run(main.synthesize_with_boundaries("Hi", SPEECHIFY_VOICE))
+    assert (audio, boundaries) == (b"ID3speechify", [{"offset": 0, "duration": 2_000_000, "text": "Hi"}])
+    assert asyncio.run(main.synthesize_mp3("Hi", SPEECHIFY_VOICE)) == b"ID3stream"
+    assert seen == [("timed", "Hi", SPEECHIFY_VOICE), ("stream", "Hi", SPEECHIFY_VOICE)]
+
+
+def test_speechify_samples_and_bad_ids_fail_clearly(client, monkeypatch):
+    monkeypatch.setattr(main.speechify, "API_KEY", "")
+    res = client.get(f"/samples/{SPEECHIFY_VOICE}")
+    assert res.status_code == 503 and "SPEECHIFY_API_KEY" in res.json()["detail"]
+    assert client.get("/samples/speechify:bad%20id").status_code == 400
